@@ -109,9 +109,9 @@ impl Hinted for NoExecutablesError {
         hints
     }
 }
-use crate::commands::project::{EnvironmentSpecification, PreferenceLocation, ProjectError};
 use crate::commands::tool::error::ToolLockError;
 use uv_dispatch::PlatformState;
+use uv_environment_operations::{EnvironmentSpecification, PreferenceLocation};
 use uv_lock_operations::ValidatedLock;
 use uv_python_context::PythonDownloadReporter;
 use uv_python_context::PythonRequestSource;
@@ -181,7 +181,7 @@ impl ToolPython {
         git_resolver: &GitResolver,
         client_builder: &BaseClientBuilder<'_>,
         cache: &Cache,
-    ) -> Result<Self, ProjectError> {
+    ) -> Result<Self, io::Error> {
         let requires_python = if python_request.is_none() {
             match requirement {
                 Some(requirement) => {

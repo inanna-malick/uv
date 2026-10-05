@@ -14,6 +14,7 @@ use itertools::Itertools;
 use owo_colors::OwoColorize;
 use tokio::process::Command;
 use tracing::{debug, warn};
+use uv_environment_operations::EnvironmentError;
 
 use uv_cache::{Cache, Refresh};
 use uv_cache_info::Timestamp;
@@ -46,11 +47,12 @@ use uv_tool::{InstalledTools, entrypoint_paths};
 use uv_warnings::warn_user_once;
 use uv_workspace::WorkspaceCache;
 
-use crate::commands::project::environment::CachedEnvironment;
-use crate::commands::project::{EnvironmentSpecification, ProjectError, resolve_names};
 use crate::commands::tool::common::{ToolPython, matching_packages, refine_interpreter};
+use crate::commands::tool::error::ToolError;
 use crate::commands::tool::{Target, ToolRequest};
 use uv_dispatch::PlatformState;
+use uv_environment_operations::environment::CachedEnvironment;
+use uv_environment_operations::{EnvironmentSpecification, resolve_names};
 use uv_install_operations::loggers::{DefaultInstallLogger, SummaryInstallLogger};
 use uv_python_context::PythonDownloadReporter;
 use uv_resolve_operations::latest::LatestClient;
@@ -312,12 +314,20 @@ pub(crate) async fn run(
     let explicit_from = from.is_some();
     let (from, environment) = match result {
         Ok(resolution) => resolution,
-        Err(err @ (ProjectError::Resolve(_) | ProjectError::Install(_))) => {
+        Err(
+            err @ (ToolError::Resolve(_)
+            | ToolError::Environment(
+                EnvironmentError::Resolve(_) | EnvironmentError::Install(_),
+            )),
+        ) => {
             let uvx_run =
                 from.is_none() && invocation_source == ToolRunCommand::Uvx && target == "run";
             let verbose_flag = find_verbose_flag(args);
             let err = match err {
-                ProjectError::Resolve(err) if uvx_run || verbose_flag.is_none() => {
+                ToolError::Resolve(err)
+                | ToolError::Environment(EnvironmentError::Resolve(err))
+                    if uvx_run || verbose_flag.is_none() =>
+                {
                     UvError::from(err.with_resolution_context("tool"))
                 }
                 err => UvError::from(err),
@@ -355,7 +365,10 @@ pub(crate) async fn run(
             return Err(err.into());
         }
 
-        Err(ProjectError::Requirements(err)) => {
+        Err(
+            ToolError::Requirements(err)
+            | ToolError::Environment(EnvironmentError::Requirements(err)),
+        ) => {
             return Err(UvError::from(
                 uv_resolve_operations::Error::Requirements(err).with_resolution_context("`--with`"),
             )
@@ -748,7 +761,7 @@ async fn get_or_create_environment(
     workspace_cache: &WorkspaceCache,
     printer: Printer,
     preview: Preview,
-) -> Result<(ToolRequirement, PythonEnvironment), ProjectError> {
+) -> Result<(ToolRequirement, PythonEnvironment), ToolError> {
     let reporter = PythonDownloadReporter::single(printer);
 
     // Initialize any shared state.
@@ -1205,7 +1218,8 @@ async fn get_or_create_environment(
     let environment = match result {
         Ok(environment) => environment,
         Err(err) => match err {
-            ProjectError::Resolve(err) => {
+            EnvironmentError::Resolve(err) => {
+                let err = *err;
                 // If the resolution failed due to the discovered interpreter not satisfying the
                 // `requires-python` constraint, we can try to refine the interpreter.
                 //
@@ -1263,7 +1277,7 @@ async fn get_or_create_environment(
                 )
                 .await?
             }
-            err => return Err(err),
+            err => return Err(err.into()),
         },
     };
 

@@ -7,6 +7,7 @@ use uv_lock_operations::LockValidationError;
 use anyhow::{Result, bail};
 use owo_colors::OwoColorize;
 use tracing::{debug, trace};
+use uv_environment_operations::EnvironmentError;
 
 use uv_cache::{Cache, Refresh};
 use uv_cache_info::Timestamp;
@@ -36,10 +37,6 @@ use uv_types::{HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::{warn_user, warn_user_once, warn_user_with_chain};
 use uv_workspace::WorkspaceCache;
 
-use crate::commands::project::{
-    EnvironmentResolution, EnvironmentSpecification, ProjectError, resolve_environment,
-    resolve_names, sync_environment, update_environment,
-};
 use crate::commands::tool::common::{
     ToolLock, ToolPython, finalize_tool_install, refine_interpreter, remove_entrypoints,
     tool_environment_spec,
@@ -48,6 +45,10 @@ use crate::commands::tool::error::ToolLockError;
 use crate::commands::tool::{Target, ToolRequest};
 use uv_configuration::Modifications;
 use uv_dispatch::PlatformState;
+use uv_environment_operations::{
+    EnvironmentResolution, EnvironmentSpecification, resolve_environment, resolve_names,
+    sync_environment, update_environment,
+};
 use uv_install_operations::loggers::DefaultInstallLogger;
 use uv_python_context::PythonDownloadReporter;
 use uv_resolve_operations::latest::LatestClient;
@@ -943,7 +944,8 @@ pub(crate) async fn install(
             let (resolution, interpreter) = match resolution {
                 Ok(resolution) => (resolution, interpreter),
                 Err(err) => match err {
-                    ProjectError::Resolve(err) => {
+                    EnvironmentError::Resolve(err) => {
+                        let err = *err;
                         // If the resolution failed due to the discovered interpreter not satisfying the
                         // `requires-python` constraint, we can try to refine the interpreter.
                         //

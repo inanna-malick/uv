@@ -92,36 +92,52 @@ mod error_tests {
     use anyhow::bail;
     use insta::{allow_duplicates, assert_snapshot};
 
+    use uv_lock_operations::LockError;
+    use uv_settings::{LockedFlag, LockedSource};
+
     use super::project;
     use uv_command_support::UvError;
 
     #[test]
     fn contextual_operations_keep_their_classification_and_cause() -> anyhow::Result<()> {
-        for (kind, user_failure) in [
-            (ErrorKind::NotFound, true),
-            (ErrorKind::PermissionDenied, false),
-        ] {
-            let error = uv_resolve_operations::Error::Requirements(uv_requirements::Error::Io(
-                Error::new(kind, "requirements failure"),
-            ));
-            let error = UvError::from(
-                error
-                    .with_resolution_context("script")
-                    .with_resolution_context("tool"),
-            );
-            let ((UvError::User(error), true) | (UvError::Unexpected(error), false)) =
-                (error, user_failure)
-            else {
-                bail!("operation classification changed with context");
-            };
-            allow_duplicates! {
-                assert_snapshot!(format!("{error:#}"), @"Failed to resolve tool requirement: requirements failure");
+        let conversions: [fn(uv_resolve_operations::Error) -> UvError; 5] = [
+            UvError::from,
+            |error| UvError::from(uv_environment_operations::EnvironmentError::from(error)),
+            |error| UvError::from(LockError::from(error)),
+            |error| UvError::from(project::ProjectError::from(LockError::from(error))),
+            |error| {
+                UvError::from(project::ProjectError::from(
+                    uv_environment_operations::EnvironmentError::from(error),
+                ))
+            },
+        ];
+        for convert in conversions {
+            for (kind, user_failure) in [
+                (ErrorKind::NotFound, true),
+                (ErrorKind::PermissionDenied, false),
+            ] {
+                let error = uv_resolve_operations::Error::Requirements(uv_requirements::Error::Io(
+                    Error::new(kind, "requirements failure"),
+                ));
+                let error = convert(
+                    error
+                        .with_resolution_context("script")
+                        .with_resolution_context("tool"),
+                );
+                let ((UvError::User(error), true) | (UvError::Unexpected(error), false)) =
+                    (error, user_failure)
+                else {
+                    bail!("operation classification changed with context");
+                };
+                allow_duplicates! {
+                    assert_snapshot!(format!("{error:#}"), @"Failed to resolve tool requirement: requirements failure");
+                }
+                assert!(
+                    error
+                        .chain()
+                        .any(<dyn std::error::Error>::is::<uv_requirements::Error>)
+                );
             }
-            assert!(
-                error
-                    .downcast_ref::<uv_resolve_operations::Error>()
-                    .is_some()
-            );
         }
         Ok(())
     }
@@ -146,21 +162,30 @@ mod error_tests {
     }
 
     #[test]
-    fn project_requirements_use_operation_classification() {
-        let error = project::ProjectError::Requirements(uv_requirements::Error::Io(Error::new(
-            ErrorKind::NotFound,
-            "requirements failure",
-        )));
-        assert!(matches!(UvError::from(error), UvError::User(_)));
-    }
-}
+    fn project_errors_use_shared_operation_classification() -> anyhow::Result<()> {
+        let error = uv_environment_operations::EnvironmentError::Requirements(
+            uv_requirements::Error::Io(Error::new(ErrorKind::NotFound, "requirements failure")),
+        );
+        assert!(matches!(
+            UvError::from(project::ProjectError::from(error)),
+            UvError::User(_)
+        ));
 
-/// Capitalize the first letter of a string.
-pub(super) fn capitalize(s: &str) -> String {
-    let mut chars = s.chars();
-    match chars.next() {
-        None => String::new(),
-        Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+        let conversions: [fn(LockError) -> UvError; 2] = [UvError::from, |error| {
+            UvError::from(project::ProjectError::from(error))
+        }];
+        for convert in conversions {
+            let error =
+                LockError::LockFormat("uv.lock".into(), 3, LockedSource::Cli(LockedFlag::Check));
+            let UvError::User(error) = convert(error) else {
+                bail!("lock policy errors must be classified as user failures");
+            };
+            allow_duplicates! {
+                assert_snapshot!(format!("{error:#}"), @"The lockfile at `uv.lock` has non-canonical formatting at line 3, but `--check` was provided.");
+            }
+            assert!(error.downcast_ref::<LockError>().is_some());
+        }
+        Ok(())
     }
 }
 

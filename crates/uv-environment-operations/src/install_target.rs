@@ -22,11 +22,11 @@ use uv_scripts::Pep723Script;
 use uv_workspace::pyproject::{Source, Sources, ToolUvSources};
 use uv_workspace::{VirtualProject, Workspace};
 
-use crate::commands::project::ProjectError;
+use crate::EnvironmentError;
 
 /// A target that can be installed from a lockfile.
 #[derive(Debug, Copy, Clone)]
-pub(crate) enum InstallTarget<'lock> {
+pub enum InstallTarget<'lock> {
     /// A project (which could be a workspace root or member).
     Project {
         workspace: &'lock Workspace,
@@ -66,7 +66,7 @@ pub(crate) enum InstallTarget<'lock> {
 
 /// The workspace packages selected by an installation target.
 #[derive(Debug, Copy, Clone)]
-pub(crate) enum PackageSelection<'lock> {
+pub enum PackageSelection<'lock> {
     Projects(&'lock [PackageName]),
     Workspace,
     NonProjectWorkspace,
@@ -74,7 +74,7 @@ pub(crate) enum PackageSelection<'lock> {
 
 impl<'lock> PackageSelection<'lock> {
     /// Resolve package flags, defaulting to the current project or non-project workspace.
-    pub(crate) fn from_args(
+    pub fn from_args(
         all_packages: bool,
         names: &'lock [PackageName],
         project_name: Option<&'lock PackageName>,
@@ -91,7 +91,7 @@ impl<'lock> PackageSelection<'lock> {
     }
 
     /// Identify workspace members excluded from installation before a lockfile is available.
-    pub(crate) fn first_party_exclusions(
+    pub fn first_party_exclusions(
         self,
         workspace: &Workspace,
         project_name: Option<&PackageName>,
@@ -285,7 +285,7 @@ impl<'lock> Installable<'lock> for InstallTarget<'lock> {
 
 impl<'lock> InstallTarget<'lock> {
     /// Select installation roots from a project and its workspace.
-    pub(crate) fn from_project(
+    pub fn from_project(
         project: &'lock VirtualProject,
         lock: &'lock Lock,
         selection: PackageSelection<'lock>,
@@ -346,7 +346,7 @@ impl<'lock> InstallTarget<'lock> {
     }
 
     /// Convert the target's locked packages to a [`Resolution`].
-    pub(crate) fn to_resolution(
+    pub fn to_resolution(
         self,
         marker_env: &ResolverMarkerEnvironment,
         tags: &Tags,
@@ -558,7 +558,7 @@ impl<'lock> InstallTarget<'lock> {
     }
 
     /// Validate the extras requested by the [`ExtrasSpecification`].
-    pub(crate) fn validate_extras(self, extras: &ExtrasSpecification) -> Result<(), ProjectError> {
+    pub fn validate_extras(self, extras: &ExtrasSpecification) -> Result<(), EnvironmentError> {
         if extras.is_empty() {
             return Ok(());
         }
@@ -589,14 +589,13 @@ impl<'lock> InstallTarget<'lock> {
                 for extra in extras.explicit_names() {
                     if !known_extras.contains(extra) {
                         return match self {
-                            Self::Project { name, .. } => Err(ProjectError::MissingExtraProject(
-                                extra.clone(),
-                                name.clone(),
-                            )),
+                            Self::Project { name, .. } => Err(
+                                EnvironmentError::MissingExtraProject(extra.clone(), name.clone()),
+                            ),
                             Self::Projects { .. } => {
-                                Err(ProjectError::MissingExtraProjects(extra.clone()))
+                                Err(EnvironmentError::MissingExtraProjects(extra.clone()))
                             }
-                            _ => Err(ProjectError::MissingExtraProjects(extra.clone())),
+                            _ => Err(EnvironmentError::MissingExtraProjects(extra.clone())),
                         };
                     }
                 }
@@ -608,7 +607,7 @@ impl<'lock> InstallTarget<'lock> {
                     .next()
                     .expect("non-empty extras")
                     .clone();
-                return Err(ProjectError::MissingExtraScript(extra));
+                return Err(EnvironmentError::MissingExtraScript(extra));
             }
         }
 
@@ -616,10 +615,10 @@ impl<'lock> InstallTarget<'lock> {
     }
 
     /// Validate the dependency groups requested by the [`DependencyGroupSpecifier`].
-    pub(crate) fn validate_groups(
+    pub fn validate_groups(
         self,
         groups: &DependencyGroupsWithDefaults,
-    ) -> Result<(), ProjectError> {
+    ) -> Result<(), EnvironmentError> {
         // If no groups were specified, short-circuit.
         if groups.explicit_names().next().is_none() {
             return Ok(());
@@ -651,12 +650,12 @@ impl<'lock> InstallTarget<'lock> {
                     if !known_groups.contains(group) {
                         return match selection {
                             PackageSelection::Projects([_]) => {
-                                Err(ProjectError::MissingGroupProject(group.clone()))
+                                Err(EnvironmentError::MissingGroupProject(group.clone()))
                             }
                             PackageSelection::Projects(_)
                             | PackageSelection::Workspace
                             | PackageSelection::NonProjectWorkspace => {
-                                Err(ProjectError::MissingGroupProjects(group.clone()))
+                                Err(EnvironmentError::MissingGroupProjects(group.clone()))
                             }
                         };
                     }
@@ -708,16 +707,16 @@ impl<'lock> InstallTarget<'lock> {
                     if !known_groups.contains(group) {
                         return match self {
                             Self::Project { .. } => {
-                                Err(ProjectError::MissingGroupProject(group.clone()))
+                                Err(EnvironmentError::MissingGroupProject(group.clone()))
                             }
-                            _ => Err(ProjectError::MissingGroupProjects(group.clone())),
+                            _ => Err(EnvironmentError::MissingGroupProjects(group.clone())),
                         };
                     }
                 }
             }
             Self::Script { .. } => {
                 if let Some(group) = groups.explicit_names().next() {
-                    return Err(ProjectError::MissingGroupScript(group.clone()));
+                    return Err(EnvironmentError::MissingGroupScript(group.clone()));
                 }
             }
         }
@@ -728,7 +727,7 @@ impl<'lock> InstallTarget<'lock> {
     /// Returns the names of all packages in the workspace that will be installed.
     ///
     /// Note this only includes workspace members.
-    pub(crate) fn packages(
+    pub(super) fn packages(
         &self,
         extras: &ExtrasSpecification,
         groups: &DependencyGroupsWithDefaults,
