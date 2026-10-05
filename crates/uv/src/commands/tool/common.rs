@@ -109,9 +109,10 @@ impl Hinted for NoExecutablesError {
         hints
     }
 }
-use crate::commands::project::{
-    EnvironmentSpecification, PlatformState, PreferenceLocation, ProjectError, lock::ValidatedLock,
-};
+use crate::commands::project::{EnvironmentSpecification, PreferenceLocation, ProjectError};
+use crate::commands::tool::error::ToolLockError;
+use uv_dispatch::PlatformState;
+use uv_lock_operations::ValidatedLock;
 use uv_python_context::PythonDownloadReporter;
 use uv_python_context::PythonRequestSource;
 use uv_settings::ResolverSettings;
@@ -412,7 +413,7 @@ impl ToolLock {
         workspace_cache: &WorkspaceCache,
         printer: Printer,
         preview: Preview,
-    ) -> Result<ValidatedToolLock, ProjectError> {
+    ) -> Result<ValidatedToolLock, ToolLockError> {
         let ResolverSettings {
             index_locations,
             index_strategy,

@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 use std::path::Path;
 use std::sync::Arc;
+use uv_lock_operations::{LockError, LockOperation};
 
 use anyhow::{Context, Result, bail};
 use itertools::Itertools;
@@ -49,16 +50,17 @@ use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache};
 
 use crate::commands::project::edit::{EditTarget, ProjectEdit, PythonTarget};
 use crate::commands::project::install_target::{InstallTarget, PackageSelection};
-use crate::commands::project::lock::LockMode;
-use crate::commands::project::lock_target::LockTarget;
 use crate::commands::project::sync::MalwareCheckContext;
 use crate::commands::project::{
-    LinkErrorReporting, PlatformState, ProjectEnvironment, ProjectEnvironmentPolicy,
-    ProjectEnvironmentTarget, ProjectError, ProjectInterpreter, UniversalState,
+    LinkErrorReporting, ProjectEnvironment, ProjectEnvironmentPolicy, ProjectEnvironmentTarget,
+    ProjectError, ProjectInterpreter,
 };
 use crate::commands::{ScriptPath, project};
 use uv_configuration::Modifications;
+use uv_dispatch::{PlatformState, UniversalState};
 use uv_install_operations::loggers::DefaultInstallLogger;
+use uv_lock_operations::LockMode;
+use uv_lock_operations::LockTarget;
 use uv_python_context::PythonDownloadReporter;
 use uv_python_context::{ProjectPythonRequest, ScriptInterpreter, init_script_python_requirement};
 use uv_resolve_operations::loggers::{DefaultResolveLogger, SummaryResolveLogger};
@@ -830,6 +832,11 @@ pub(crate) async fn add(
                         standard_library_package(&err, &edits, python_minor);
                     (UvError::from(err), standard_library_package)
                 }
+                ProjectError::Lock(LockError::Resolve(err)) => {
+                    let standard_library_package =
+                        standard_library_package(&err, &edits, python_minor);
+                    (UvError::from(*err), standard_library_package)
+                }
                 ProjectError::Install(err) => (UvError::from(err), None),
                 err => return Err(UvError::from(err).into()),
             };
@@ -1122,7 +1129,7 @@ async fn lock_and_sync(
         EditTarget::Script(..) => BTreeSet::new(),
     };
     let mut lock = Box::pin(
-        project::lock::LockOperation::new(
+        LockOperation::new(
             if let LockCheck::Enabled(lock_check) = lock_check {
                 LockMode::Locked(python_target.interpreter(), lock_check)
             } else if dry_run {
@@ -1252,7 +1259,7 @@ async fn lock_and_sync(
             // If the file was modified, we have to lock again, though the only expected change is
             // the addition of the minimum version specifiers.
             lock = Box::pin(
-                project::lock::LockOperation::new(
+                LockOperation::new(
                     if let LockCheck::Enabled(lock_check) = lock_check {
                         LockMode::Locked(python_target.interpreter(), lock_check)
                     } else if dry_run {

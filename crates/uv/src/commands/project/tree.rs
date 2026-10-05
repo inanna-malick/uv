@@ -25,14 +25,15 @@ use uv_settings::PythonInstallMirrors;
 use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, WorkspaceCache};
 
-use crate::commands::project::discovery::DiscoveredProject;
 use crate::commands::project::install_target::{InstallTarget, PackageSelection};
-use crate::commands::project::lock::{LockMode, LockOperation};
-use crate::commands::project::lock_target::LockTarget;
-use crate::commands::project::lockfile::FrozenWorkspace;
 use crate::commands::project::{
-    ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter, UniversalState,
+    ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter,
 };
+use uv_dispatch::UniversalState;
+use uv_lock_operations::DiscoveredProject;
+use uv_lock_operations::FrozenWorkspace;
+use uv_lock_operations::LockTarget;
+use uv_lock_operations::{LockMode, LockOperation};
 use uv_python_context::{ProjectPythonRequest, ScriptInterpreter};
 use uv_resolve_operations::latest::LatestClient;
 use uv_resolve_operations::loggers::DefaultResolveLogger;

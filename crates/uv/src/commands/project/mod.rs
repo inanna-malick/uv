@@ -9,30 +9,27 @@ use owo_colors::OwoColorize;
 use tracing::{debug, warn};
 use uv_audit::osv;
 use uv_audit::{Dependency, VulnerabilityID};
-use uv_auth::{CredentialsCache, CredentialsFromUrlError};
+use uv_auth::CredentialsFromUrlError;
 use uv_cache::{Cache, CacheBucket};
 use uv_cache_key::{cache_digest, cache_name};
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_command_support::{Printer, UvError, conjunction};
 use uv_configuration::{
     ActiveEnvironment, Concurrency, Constraints, DependencyGroupsWithDefaults, DryRun,
-    ExtrasSpecification, GitLfsSetting, HashCheckingMode, NoSources, Override, PackageOverride,
-    Reinstall, TargetTriple, Upgrade,
+    ExtrasSpecification, GitLfsSetting, HashCheckingMode, Reinstall, TargetTriple, Upgrade,
 };
-use uv_dispatch::{BuildDispatch, SharedState};
-use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies, LoweredRequirement};
+use uv_dispatch::{BuildDispatch, PlatformState, SharedState};
+use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies};
 use uv_distribution_types::{
-    ExtraBuildRequirement, ExtraBuildRequires, HashCollection, Index, IndexCredentialsError,
-    IndexLocations, IndexUrlError, Requirement, RequiresPython, Resolution, UnresolvedRequirement,
-    UnresolvedRequirementSpecification,
+    ExtraBuildRequires, HashCollection, Index, IndexCredentialsError, IndexUrlError, Requirement,
+    RequiresPython, Resolution, UnresolvedRequirement, UnresolvedRequirementSpecification,
 };
 use uv_fs::{LockedFile, LockedFileError, LockedFileMode, Simplified, verbatim_path};
 use uv_git::ResolvedRepositoryReference;
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
-use uv_lock::{Installable, Lock, LockParseError};
+use uv_lock::{Installable, Lock};
 use uv_normalize::{ExtraName, GroupName, PackageName};
-use uv_pep440::{Version, VersionSpecifiers};
-use uv_pep508::MarkerTreeContents;
+use uv_pep440::Version;
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{ConflictItem, ConflictKind, ConflictSet, Conflicts};
 use uv_python::managed::{ManagedPythonInstallation, PythonMinorVersionLink};
@@ -43,8 +40,8 @@ use uv_python::{
 };
 use uv_requirements::{NamedRequirementsResolver, RequirementsSpecification};
 use uv_resolver::{
-    DependencyMode, FlatIndex, InMemoryIndex, OptionsBuilder, Preference, PythonRequirement,
-    ResolverEnvironment, ResolverOutput,
+    DependencyMode, FlatIndex, OptionsBuilder, Preference, PythonRequirement, ResolverEnvironment,
+    ResolverOutput,
 };
 use uv_scripts::Pep723ItemRef;
 use uv_settings::PythonInstallMirrors;
@@ -52,7 +49,6 @@ use uv_torch::TorchStrategy;
 use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::{warn_user, warn_user_once};
 use uv_workspace::dependency_groups::DependencyGroupError;
-use uv_workspace::pyproject::ExtraBuildDependency;
 use uv_workspace::{ProjectEnvironmentSelection, RequiresPythonSources, Workspace, WorkspaceCache};
 
 use crate::commands::capitalize;
@@ -70,14 +66,11 @@ use uv_python_context::{
 use uv_resolve_operations::locked_requirements::{LockedRequirements, read_lock_requirements};
 use uv_resolve_operations::loggers::ResolveLogger;
 use uv_resolve_operations::reporters::ResolverReporter;
-use uv_settings::{
-    FrozenSource, InstallerSettingsRef, LockedSource, ResolverInstallerSettings, ResolverSettings,
-};
+use uv_settings::{InstallerSettingsRef, ResolverInstallerSettings, ResolverSettings};
 
 pub(crate) mod add;
 pub(crate) mod audit;
 pub(crate) mod check;
-pub(super) mod discovery;
 mod edit;
 pub(crate) mod environment;
 pub(crate) mod export;
@@ -85,8 +78,6 @@ pub(crate) mod format;
 pub(crate) mod init;
 pub(crate) mod install_target;
 pub(crate) mod lock;
-pub(crate) mod lock_target;
-pub(super) mod lockfile;
 mod python;
 pub(crate) mod remove;
 pub(crate) mod run;
@@ -96,71 +87,13 @@ pub(crate) mod tree;
 pub(crate) mod upgrade;
 pub(crate) mod version;
 
-/// The source of a missing lockfile error.
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum MissingLockfileSource {
-    /// Frozen mode required an existing lockfile.
-    Frozen(FrozenSource),
-    /// A lock check required an existing lockfile.
-    Locked(LockedSource),
-}
-
-impl std::fmt::Display for MissingLockfileSource {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Frozen(source) => write!(f, "`{source}`"),
-            Self::Locked(source) => write!(f, "`{source}`"),
-        }
-    }
-}
-
-impl From<LockedSource> for MissingLockfileSource {
-    fn from(source: LockedSource) -> Self {
-        Self::Locked(source)
-    }
-}
-
-impl From<FrozenSource> for MissingLockfileSource {
-    fn from(source: FrozenSource) -> Self {
-        Self::Frozen(source)
-    }
-}
-
 #[derive(thiserror::Error, Debug)]
 pub(crate) enum ProjectError {
     #[error(transparent)]
+    Lock(#[from] uv_lock_operations::LockError),
+
+    #[error(transparent)]
     PythonContext(#[from] Box<uv_python_context::PythonContextError>),
-
-    #[error("The lockfile at `uv.lock` needs to be updated, but `{2}` was provided.")]
-    LockMismatch(Option<Box<Lock>>, Box<Lock>, LockedSource),
-
-    #[error(
-        "The lockfile at `{0}` has non-canonical formatting at line {1}, but `{2}` was provided."
-    )]
-    LockFormat(PathBuf, usize, LockedSource),
-
-    #[error(
-        "Unable to find lockfile at `{1}`, but {0} was provided. To create a lockfile, run `uv lock` or `uv sync` without the flag."
-    )]
-    MissingLockfile(MissingLockfileSource, PathBuf),
-
-    #[error(
-        "The lockfile at `uv.lock` needs to be updated, but {1} was provided: Missing workspace member `{0}`."
-    )]
-    LockWorkspaceMismatch(PackageName, MissingLockfileSource),
-
-    #[error(
-        "The lockfile at `uv.lock` uses an unsupported schema version (v{1}, but only v{0} is supported). Downgrade to a compatible uv version, or remove the `uv.lock` prior to running `uv lock` or `uv sync`."
-    )]
-    UnsupportedLockVersion(u32, u32),
-
-    #[error(
-        "Failed to parse `uv.lock`, which uses an unsupported schema version (v{1}, but only v{0} is supported). Downgrade to a compatible uv version, or remove the `uv.lock` prior to running `uv lock` or `uv sync`."
-    )]
-    UnparsableLockVersion(u32, u32, #[source] toml::de::Error),
-
-    #[error("Failed to serialize `uv.lock`")]
-    LockSerialization(#[from] toml_edit::ser::Error),
 
     #[error(
         "The current Python version ({0}) is not compatible with the locked Python requirement: `{1}`"
@@ -194,14 +127,6 @@ pub(crate) enum ProjectError {
     MissingExtraScript(ExtraName),
 
     #[error(
-        "Supported environments must be disjoint, but the following markers overlap: `{0}` and `{1}`"
-    )]
-    OverlappingMarkers(String, String, String),
-
-    #[error("Environment markers `{0}` don't overlap with Python requirement `{1}`")]
-    DisjointEnvironment(MarkerTreeContents, VersionSpecifiers),
-
-    #[error(
         "Found conflicting Python requirements:\n- lockfile: {locked}\n{groups}",
         groups = format_requires_python_sources(.groups)
     )]
@@ -210,14 +135,8 @@ pub(crate) enum ProjectError {
         groups: RequiresPythonSources,
     },
 
-    #[error("Environment marker is empty")]
-    EmptyEnvironment,
-
     #[error("Project virtual environment directory `{0}` cannot be used because {1}")]
     InvalidProjectEnvironmentDir(PathBuf, String),
-
-    #[error("Failed to parse `uv.lock`")]
-    UvLockParse(#[source] toml::de::Error),
 
     #[error("Failed to parse `pyproject.toml`")]
     PyprojectTomlParse(#[source] uv_workspace::pyproject::PyprojectTomlError),
@@ -279,7 +198,7 @@ pub(crate) enum ProjectError {
     FlatIndex(#[from] uv_client::FlatIndexError),
 
     #[error(transparent)]
-    Lock(#[from] uv_lock::LockError),
+    LockData(#[from] uv_lock::LockError),
 
     #[error(transparent)]
     Resolve(#[from] uv_resolve_operations::Error),
@@ -342,22 +261,6 @@ impl From<uv_python_context::PythonContextError> for ProjectError {
     }
 }
 
-impl From<LockParseError> for ProjectError {
-    fn from(error: LockParseError) -> Self {
-        match error {
-            LockParseError::UnsupportedVersion { supported, version } => {
-                Self::UnsupportedLockVersion(supported, version)
-            }
-            LockParseError::UnparsableVersion {
-                supported,
-                version,
-                source,
-            } => Self::UnparsableLockVersion(supported, version, source),
-            LockParseError::Toml(source) => Self::UvLockParse(source),
-        }
-    }
-}
-
 /// Vulnerability identifiers grouped by dependency.
 #[derive(Debug)]
 pub(crate) struct MalwareFindings(pub(crate) Vec<(Dependency, Vec<VulnerabilityID>)>);
@@ -388,15 +291,7 @@ impl std::fmt::Display for MalwareFindings {
 impl uv_errors::Hinted for ProjectError {
     fn hints(&self) -> uv_errors::Hints<'_> {
         match self {
-            Self::LockMismatch(..) | Self::LockWorkspaceMismatch(..) => {
-                uv_errors::Hints::from("To update the lockfile, run `uv lock`.")
-            }
-            Self::LockFormat(..) => uv_errors::Hints::from(
-                "To regenerate the lockfile, run `uv lock --refresh --preview-features lockfile-format-check`.",
-            ),
-            Self::OverlappingMarkers(_, rhs, replacement) => {
-                uv_errors::Hints::from(format!("replace `{rhs}` with `{replacement}`"))
-            }
+            Self::LockData(err) => err.hints(),
             Self::Lock(err) => err.hints(),
             Self::Python(err) => err.hints(),
             Self::PythonContext(err) => err.hints(),
@@ -506,54 +401,6 @@ impl std::fmt::Display for ConflictError {
 }
 
 impl std::error::Error for ConflictError {}
-
-/// A [`SharedState`] instance to use for universal resolution.
-#[derive(Default, Clone)]
-pub(crate) struct UniversalState(SharedState);
-
-impl std::ops::Deref for UniversalState {
-    type Target = SharedState;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl UniversalState {
-    /// Return mutable access to the index owner between lock operations.
-    fn index_mut(&mut self) -> &mut InMemoryIndex {
-        self.0.index_mut()
-    }
-
-    /// Fork the [`UniversalState`] to create a [`PlatformState`].
-    pub(crate) fn fork(&self) -> PlatformState {
-        PlatformState(self.0.fork())
-    }
-}
-
-/// A [`SharedState`] instance to use for platform-specific resolution.
-#[derive(Default, Clone)]
-pub(crate) struct PlatformState(SharedState);
-
-impl std::ops::Deref for PlatformState {
-    type Target = SharedState;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl PlatformState {
-    /// Fork the [`PlatformState`] to create a [`UniversalState`].
-    fn fork(&self) -> UniversalState {
-        UniversalState(self.0.fork())
-    }
-
-    /// Create a [`SharedState`] from the [`PlatformState`].
-    pub(crate) fn into_inner(self) -> SharedState {
-        self.0
-    }
-}
 
 /// The policy for discovering and initializing a project environment.
 #[derive(Debug, Clone, Copy)]
@@ -2569,214 +2416,6 @@ pub(crate) fn detect_conflicts(
     Ok(())
 }
 
-/// Determine the [`RequirementsSpecification`] for a script.
-pub(crate) async fn script_specification(
-    script: Pep723ItemRef<'_>,
-    sources: &NoSources,
-    index_locations: &IndexLocations,
-    cache: &Cache,
-    workspace_cache: &WorkspaceCache,
-    credentials_cache: &CredentialsCache,
-) -> Result<Option<RequirementsSpecification>, ProjectError> {
-    let Some(dependencies) = script.metadata().dependencies.as_ref() else {
-        return Ok(None);
-    };
-
-    let script_dir = script.directory()?;
-    let script_indexes = script
-        .indexes(sources)
-        .iter()
-        .cloned()
-        .map(|index| index.relative_to(&script_dir))
-        .collect::<Result<Vec<_>, _>>()?;
-    let script_sources = script.sources(sources);
-
-    let mut requirements = Vec::new();
-    for requirement in dependencies.iter().cloned() {
-        requirements.extend(
-            LoweredRequirement::from_non_workspace_requirement(
-                requirement,
-                script_dir.as_ref(),
-                script_sources.as_ref(),
-                &script_indexes,
-                index_locations,
-                cache,
-                workspace_cache,
-                credentials_cache,
-            )
-            .await
-            .map_ok(LoweredRequirement::into_inner)
-            .collect::<Result<Vec<_>, _>>()?,
-        );
-    }
-    let constraint_dependencies = script
-        .metadata()
-        .tool
-        .as_ref()
-        .and_then(|tool| tool.uv.as_ref())
-        .and_then(|uv| uv.constraint_dependencies.as_ref())
-        .into_iter()
-        .flatten()
-        .cloned();
-    let mut constraints = Vec::new();
-    for requirement in constraint_dependencies {
-        constraints.extend(
-            LoweredRequirement::from_non_workspace_requirement(
-                requirement,
-                script_dir.as_ref(),
-                script_sources.as_ref(),
-                &script_indexes,
-                index_locations,
-                cache,
-                workspace_cache,
-                credentials_cache,
-            )
-            .await
-            .map_ok(LoweredRequirement::into_inner)
-            .collect::<Result<Vec<_>, _>>()?,
-        );
-    }
-    let overrides = {
-        let override_entries = script
-            .metadata()
-            .tool
-            .as_ref()
-            .and_then(|tool| tool.uv.as_ref())
-            .and_then(|uv| uv.override_dependencies.as_ref())
-            .into_iter()
-            .flatten()
-            .cloned();
-        let mut overrides = Vec::new();
-        for entry in override_entries {
-            match entry {
-                Override::Requirement(requirement) => {
-                    overrides.extend(
-                        LoweredRequirement::from_non_workspace_requirement(
-                            requirement,
-                            script_dir.as_ref(),
-                            script_sources.as_ref(),
-                            &script_indexes,
-                            index_locations,
-                            cache,
-                            workspace_cache,
-                            credentials_cache,
-                        )
-                        .await
-                        .map_ok(LoweredRequirement::into_inner)
-                        .map_ok(Override::Requirement)
-                        .collect::<Result<Vec<_>, _>>()?,
-                    );
-                }
-                Override::Package(package) => {
-                    let mut dependencies = Vec::new();
-                    for requirement in package.dependencies.into_vec() {
-                        dependencies.extend(
-                            LoweredRequirement::from_non_workspace_requirement(
-                                requirement,
-                                script_dir.as_ref(),
-                                script_sources.as_ref(),
-                                &script_indexes,
-                                index_locations,
-                                cache,
-                                workspace_cache,
-                                credentials_cache,
-                            )
-                            .await
-                            .map_ok(LoweredRequirement::into_inner)
-                            .collect::<Result<Vec<_>, _>>()?,
-                        );
-                    }
-                    overrides.push(Override::Package(PackageOverride {
-                        package: package.package,
-                        dependencies: dependencies.into_boxed_slice(),
-                    }));
-                }
-            }
-        }
-        overrides
-    };
-    let excludes = script
-        .metadata()
-        .tool
-        .as_ref()
-        .and_then(|tool| tool.uv.as_ref())
-        .and_then(|uv| uv.exclude_dependencies.as_ref())
-        .into_iter()
-        .flatten()
-        .cloned()
-        .collect::<Vec<_>>();
-
-    let mut specification =
-        RequirementsSpecification::from_excludes(requirements, constraints, Vec::new(), Vec::new());
-    specification.override_dependencies = overrides;
-    specification.excludes = excludes;
-    Ok(Some(specification))
-}
-
-/// Determine the extra build requires for a script.
-pub(crate) async fn script_extra_build_requires(
-    script: Pep723ItemRef<'_>,
-    sources: &NoSources,
-    index_locations: &IndexLocations,
-    cache: &Cache,
-    workspace_cache: &WorkspaceCache,
-    credentials_cache: &CredentialsCache,
-) -> Result<LoweredExtraBuildDependencies, ProjectError> {
-    let script_dir = script.directory()?;
-    let script_indexes = script
-        .indexes(sources)
-        .iter()
-        .cloned()
-        .map(|index| index.relative_to(&script_dir))
-        .collect::<Result<Vec<_>, _>>()?;
-    let script_sources = script.sources(sources);
-
-    // Collect any `tool.uv.extra-build-dependencies` from the script.
-    let empty = BTreeMap::default();
-    let script_extra_build_dependencies = script
-        .metadata()
-        .tool
-        .as_ref()
-        .and_then(|tool| tool.uv.as_ref())
-        .and_then(|uv| uv.extra_build_dependencies.as_ref())
-        .unwrap_or(&empty);
-
-    // Lower the extra build dependencies.
-    let mut extra_build_requires = ExtraBuildRequires::default();
-    for (name, requirements) in script_extra_build_dependencies {
-        let mut lowered_requirements = Vec::new();
-        for ExtraBuildDependency {
-            requirement,
-            match_runtime,
-        } in requirements.iter().cloned()
-        {
-            lowered_requirements.extend(
-                LoweredRequirement::from_non_workspace_requirement(
-                    requirement,
-                    script_dir.as_ref(),
-                    script_sources.as_ref(),
-                    &script_indexes,
-                    index_locations,
-                    cache,
-                    workspace_cache,
-                    credentials_cache,
-                )
-                .await
-                .map_ok(|requirement| ExtraBuildRequirement {
-                    requirement: requirement.into_inner(),
-                    match_runtime,
-                })
-                .collect::<Result<Vec<_>, _>>()?,
-            );
-        }
-        extra_build_requires.insert(name.clone(), lowered_requirements);
-    }
-
-    Ok(LoweredExtraBuildDependencies::from_lowered(
-        extra_build_requires,
-    ))
-}
-
 /// Warn if the user provides (e.g.) an `--index-url` in a requirements file.
 fn warn_on_requirements_txt_setting(spec: &RequirementsSpecification, settings: &ResolverSettings) {
     let RequirementsSpecification {
@@ -2843,16 +2482,23 @@ fn warn_on_requirements_txt_setting(spec: &RequirementsSpecification, settings: 
 impl From<ProjectError> for UvError {
     fn from(error: ProjectError) -> Self {
         match error {
-            error @ (ProjectError::LockMismatch(..)
-            | ProjectError::LockFormat(..)
-            | ProjectError::MissingLockfile(..)
-            | ProjectError::LockWorkspaceMismatch(..)) => Self::user(error),
+            ProjectError::Lock(error) => Self::from(error),
             ProjectError::Resolve(error) => Self::from(error),
             ProjectError::Install(error) => Self::from(error),
             ProjectError::Requirements(error) => {
                 Self::from(uv_resolve_operations::Error::Requirements(error))
             }
             error => Self::unexpected(error.into()),
+        }
+    }
+}
+
+impl From<uv_requirements::ScriptRequirementsError> for ProjectError {
+    fn from(error: uv_requirements::ScriptRequirementsError) -> Self {
+        match error {
+            uv_requirements::ScriptRequirementsError::Io(error) => Self::Io(error),
+            uv_requirements::ScriptRequirementsError::IndexUrl(error) => Self::IndexUrl(error),
+            uv_requirements::ScriptRequirementsError::Lowering(error) => Self::Lowering(*error),
         }
     }
 }

@@ -5823,7 +5823,6 @@ dependencies = [
  "tokio-util",
  "toml",
  "toml_edit",
- "toml_parser",
  "tracing",
  "tracing-durations-export",
  "tracing-subscriber",
@@ -5857,6 +5856,7 @@ dependencies = [
  "uv-install-wheel",
  "uv-installer",
  "uv-lock",
+ "uv-lock-operations",
  "uv-logging",
  "uv-normalize",
  "uv-pep440",
@@ -6942,6 +6942,50 @@ dependencies = [
 ]
 
 [[package]]
+name = "uv-lock-operations"
+version = "0.0.90"
+dependencies = [
+ "anyhow",
+ "fs-err",
+ "itertools 0.14.0",
+ "owo-colors",
+ "rustc-hash",
+ "thiserror",
+ "toml",
+ "toml_edit",
+ "toml_parser",
+ "tracing",
+ "uv-auth",
+ "uv-cache",
+ "uv-client",
+ "uv-command-support",
+ "uv-configuration",
+ "uv-dispatch",
+ "uv-distribution",
+ "uv-distribution-types",
+ "uv-errors",
+ "uv-fs",
+ "uv-git",
+ "uv-lock",
+ "uv-normalize",
+ "uv-pep440",
+ "uv-pep508",
+ "uv-platform-tags",
+ "uv-preview",
+ "uv-pypi-types",
+ "uv-python",
+ "uv-python-context",
+ "uv-requirements",
+ "uv-resolve-operations",
+ "uv-resolver",
+ "uv-scripts",
+ "uv-settings",
+ "uv-types",
+ "uv-warnings",
+ "uv-workspace",
+]
+
+[[package]]
 name = "uv-logging"
 version = "0.0.90"
 dependencies = [
@@ -7349,6 +7393,8 @@ dependencies = [
  "thiserror",
  "tracing",
  "url",
+ "uv-auth",
+ "uv-cache",
  "uv-cache-key",
  "uv-client",
  "uv-configuration",
@@ -7366,6 +7412,7 @@ dependencies = [
  "uv-scripts",
  "uv-types",
  "uv-warnings",
+ "uv-workspace",
 ]
 
 [[package]]

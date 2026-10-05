@@ -2,6 +2,7 @@ use std::fmt::Write;
 use std::str::FromStr;
 use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_distribution_types::RequirementScope;
+use uv_lock_operations::LockValidationError;
 
 use anyhow::{Result, bail};
 use owo_colors::OwoColorize;
@@ -36,15 +37,17 @@ use uv_warnings::{warn_user, warn_user_once, warn_user_with_chain};
 use uv_workspace::WorkspaceCache;
 
 use crate::commands::project::{
-    EnvironmentResolution, EnvironmentSpecification, PlatformState, ProjectError,
-    resolve_environment, resolve_names, sync_environment, update_environment,
+    EnvironmentResolution, EnvironmentSpecification, ProjectError, resolve_environment,
+    resolve_names, sync_environment, update_environment,
 };
 use crate::commands::tool::common::{
     ToolLock, ToolPython, finalize_tool_install, refine_interpreter, remove_entrypoints,
     tool_environment_spec,
 };
+use crate::commands::tool::error::ToolLockError;
 use crate::commands::tool::{Target, ToolRequest};
 use uv_configuration::Modifications;
+use uv_dispatch::PlatformState;
 use uv_install_operations::loggers::DefaultInstallLogger;
 use uv_python_context::PythonDownloadReporter;
 use uv_resolve_operations::latest::LatestClient;
@@ -551,8 +554,10 @@ pub(crate) async fn install(
             .await
             {
                 Ok(lock) => Some(lock),
-                Err(ProjectError::Lock(err)) if err.is_resolution() || err.is_no_build() => {
-                    return Err(ProjectError::Lock(err).into());
+                Err(ToolLockError::Validation(LockValidationError::Lock(err)))
+                    if err.is_resolution() || err.is_no_build() =>
+                {
+                    return Err(err.into());
                 }
                 Err(err) => {
                     warn_user_with_chain!(

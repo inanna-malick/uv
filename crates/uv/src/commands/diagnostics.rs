@@ -35,6 +35,7 @@ pub(crate) fn hints_for_error(err: &anyhow::Error) -> Hints<'static> {
         collect_hint::<uv_resolver::NoSolutionError>(cause, &mut hints);
         collect_hint::<uv_resolver::ResolveError>(cause, &mut hints);
         collect_hint::<uv_lock::LockError>(cause, &mut hints);
+        collect_hint::<uv_lock_operations::LockError>(cause, &mut hints);
         collect_hint::<uv_resolve_operations::Error>(cause, &mut hints);
         collect_hint::<uv_install_operations::Error>(cause, &mut hints);
         collect_hint::<ToolRunScriptError>(cause, &mut hints);

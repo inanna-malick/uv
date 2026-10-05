@@ -43,6 +43,7 @@ use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_configuration::{PythonUpgrade, PythonUpgradeSource, ToolRunCommand};
 use uv_flags::EnvironmentFlags;
 use uv_fs::{CWD, Simplified, normalize_path};
+use uv_lock_operations::LockError;
 #[cfg(feature = "self-update")]
 use uv_pep440::release_specifiers_to_ranges;
 use uv_pep508::VersionOrUrl;
@@ -3144,7 +3145,10 @@ where
                 Err(err)
                     if matches!(
                         err.downcast_ref::<ProjectError>(),
-                        Some(ProjectError::LockFormat(..))
+                        Some(ProjectError::Lock(LockError::LockFormat(..)))
+                    ) || matches!(
+                        err.downcast_ref::<LockError>(),
+                        Some(LockError::LockFormat(..))
                     ) =>
                 {
                     UvError::User(err)

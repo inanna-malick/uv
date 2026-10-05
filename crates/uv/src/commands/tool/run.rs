@@ -47,11 +47,10 @@ use uv_warnings::warn_user_once;
 use uv_workspace::WorkspaceCache;
 
 use crate::commands::project::environment::CachedEnvironment;
-use crate::commands::project::{
-    EnvironmentSpecification, PlatformState, ProjectError, resolve_names,
-};
+use crate::commands::project::{EnvironmentSpecification, ProjectError, resolve_names};
 use crate::commands::tool::common::{ToolPython, matching_packages, refine_interpreter};
 use crate::commands::tool::{Target, ToolRequest};
+use uv_dispatch::PlatformState;
 use uv_install_operations::loggers::{DefaultInstallLogger, SummaryInstallLogger};
 use uv_python_context::PythonDownloadReporter;
 use uv_resolve_operations::latest::LatestClient;

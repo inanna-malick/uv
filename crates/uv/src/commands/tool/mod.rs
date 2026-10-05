@@ -209,3 +209,5 @@ mod tests {
         assert_eq!(target, expected);
     }
 }
+
+mod error;

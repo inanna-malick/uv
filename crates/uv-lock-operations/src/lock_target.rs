@@ -21,6 +21,7 @@ use uv_lock::Lock;
 use uv_normalize::{GroupName, PackageName};
 use uv_pep508::RequirementOrigin;
 use uv_pypi_types::{Conflicts, SupportedEnvironments, VerbatimParsedUrl};
+use uv_python_context::find_requires_python;
 use uv_scripts::Pep723Script;
 use uv_workspace::dependency_groups::{
     DependencyGroupError, FlatDependencyGroup, FlatDependencyGroups,
@@ -28,12 +29,11 @@ use uv_workspace::dependency_groups::{
 use uv_workspace::pyproject::{BuildConstraintDependency, OverrideDependency};
 use uv_workspace::{Editability, Workspace, WorkspaceCache, WorkspaceMember};
 
-use crate::commands::project::{MissingLockfileSource, ProjectError};
-use uv_python_context::find_requires_python;
+use crate::{LockError, MissingLockfileSource};
 
 /// A target that can be resolved into a lockfile.
 #[derive(Debug, Copy, Clone)]
-pub(crate) enum LockTarget<'lock> {
+pub enum LockTarget<'lock> {
     Workspace(&'lock Workspace),
     Script(&'lock Pep723Script),
 }
@@ -140,7 +140,7 @@ impl<'lock> LockTarget<'lock> {
     }
 
     /// Validate the dependency groups requested by `--upgrade-group`.
-    pub(crate) fn validate_upgrade_groups(self, upgrade: &Upgrade) -> Result<(), ProjectError> {
+    pub(crate) fn validate_upgrade_groups(self, upgrade: &Upgrade) -> Result<(), LockError> {
         let Some(groups) = upgrade.groups() else {
             return Ok(());
         };
@@ -163,16 +163,16 @@ impl<'lock> LockTarget<'lock> {
                 for group in groups {
                     if !known_groups.contains(group) {
                         return if workspace.packages().len() == 1 && !workspace.is_non_project() {
-                            Err(ProjectError::MissingGroupProject(group.clone()))
+                            Err(LockError::MissingGroupProject(group.clone()))
                         } else {
-                            Err(ProjectError::MissingGroupProjects(group.clone()))
+                            Err(LockError::MissingGroupProjects(group.clone()))
                         };
                     }
                 }
             }
             Self::Script(_) => {
                 if let Some(group) = groups.iter().next() {
-                    return Err(ProjectError::MissingGroupScript(group.clone()));
+                    return Err(LockError::MissingGroupScript(group.clone()));
                 }
             }
         }
@@ -240,7 +240,7 @@ impl<'lock> LockTarget<'lock> {
     }
 
     /// Returns the set of supported environments for the [`LockTarget`].
-    pub(crate) fn environments(self) -> Option<&'lock SupportedEnvironments> {
+    pub fn environments(self) -> Option<&'lock SupportedEnvironments> {
         match self {
             Self::Workspace(workspace) => workspace.environments(),
             Self::Script(_) => {
@@ -270,7 +270,7 @@ impl<'lock> LockTarget<'lock> {
     }
 
     /// Returns the set of conflicts for the [`LockTarget`].
-    pub(crate) fn conflicts(self) -> Result<Conflicts, ProjectError> {
+    pub(crate) fn conflicts(self) -> Result<Conflicts, LockError> {
         match self {
             Self::Workspace(workspace) => Ok(workspace.conflicts()?),
             Self::Script(_) => Ok(Conflicts::empty()),
@@ -306,12 +306,12 @@ impl<'lock> LockTarget<'lock> {
     }
 
     /// Return the `Requires-Python` bound for the [`LockTarget`].
-    pub(crate) fn requires_python(self) -> Result<Option<RequiresPython>, ProjectError> {
+    pub fn requires_python(self) -> Result<Option<RequiresPython>, LockError> {
         match self {
             Self::Workspace(workspace) => {
                 // When locking, don't try to enforce requires-python bounds that appear on groups
                 let groups = DependencyGroupsWithDefaults::none();
-                find_requires_python(workspace, &groups).map_err(ProjectError::from)
+                Ok(find_requires_python(workspace, &groups)?)
             }
             Self::Script(script) => Ok(script
                 .metadata
@@ -322,7 +322,7 @@ impl<'lock> LockTarget<'lock> {
     }
 
     /// Return the path to the lock root.
-    pub(crate) fn install_path(self) -> &'lock Path {
+    pub fn install_path(self) -> &'lock Path {
         match self {
             Self::Workspace(workspace) => workspace.install_path(),
             Self::Script(script) => script.path.parent().unwrap(),
@@ -335,7 +335,7 @@ impl<'lock> LockTarget<'lock> {
     }
 
     /// Return the path to the lockfile.
-    pub(crate) fn lock_path(self) -> PathBuf {
+    pub fn lock_path(self) -> PathBuf {
         match self {
             // `uv.lock`
             Self::Workspace(workspace) => workspace.install_path().join("uv.lock"),
@@ -354,7 +354,7 @@ impl<'lock> LockTarget<'lock> {
     /// Read the lockfile from the workspace.
     ///
     /// Returns `Ok(None)` if the lockfile does not exist.
-    pub(crate) async fn read(self) -> Result<Option<Lock>, ProjectError> {
+    pub async fn read(self) -> Result<Option<Lock>, LockError> {
         Ok(self
             .read_with_contents()
             .await?
@@ -362,24 +362,21 @@ impl<'lock> LockTarget<'lock> {
     }
 
     /// Read an existing lockfile and validate that it contains the discovered workspace members.
-    pub(crate) async fn read_frozen(
-        self,
-        source: MissingLockfileSource,
-    ) -> Result<Lock, ProjectError> {
+    pub async fn read_frozen(self, source: MissingLockfileSource) -> Result<Lock, LockError> {
         let lock_filename = self.lock_filename();
         let existing = self
             .read()
             .await?
-            .ok_or(ProjectError::MissingLockfile(source, lock_filename))?;
+            .ok_or(LockError::MissingLockfile(source, lock_filename))?;
 
         // Check if the discovered workspace members match the locked workspace members.
         if let Self::Workspace(workspace) = self {
             for package_name in workspace.packages().keys() {
                 existing
                     .find_by_name(package_name)
-                    .map_err(|_| ProjectError::LockWorkspaceMismatch(package_name.clone(), source))?
+                    .map_err(|_| LockError::LockWorkspaceMismatch(package_name.clone(), source))?
                     .ok_or_else(|| {
-                        ProjectError::LockWorkspaceMismatch(package_name.clone(), source)
+                        LockError::LockWorkspaceMismatch(package_name.clone(), source)
                     })?;
             }
         }
@@ -389,7 +386,7 @@ impl<'lock> LockTarget<'lock> {
     /// Read the lockfile and return the exact contents that were parsed.
     ///
     /// Returns `Ok(None)` if the lockfile does not exist.
-    pub(crate) async fn read_with_contents(self) -> Result<Option<(Lock, String)>, ProjectError> {
+    pub(crate) async fn read_with_contents(self) -> Result<Option<(Lock, String)>, LockError> {
         let lock_path = self.lock_path();
         match fs_err::tokio::read_to_string(&lock_path).await {
             Ok(encoded) => {
@@ -403,14 +400,14 @@ impl<'lock> LockTarget<'lock> {
     }
 
     /// Write the lockfile to disk.
-    pub(crate) async fn commit(self, lock: &Lock) -> Result<(), ProjectError> {
+    pub(crate) async fn commit(self, lock: &Lock) -> Result<(), LockError> {
         let encoded = lock.to_toml()?;
         fs_err::tokio::write(self.lock_path(), encoded).await?;
         Ok(())
     }
 
     /// Lower build constraints without losing hashes when a source expands into multiple requirements.
-    pub(crate) async fn lower_build_constraints(
+    pub async fn lower_build_constraints(
         self,
         locations: &IndexLocations,
         sources: &NoSources,

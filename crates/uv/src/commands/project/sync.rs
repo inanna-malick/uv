@@ -45,21 +45,25 @@ use uv_warnings::{warn_user, warn_user_once};
 use uv_workspace::pyproject::Source;
 use uv_workspace::{DiscoveryOptions, MemberDiscovery, VirtualProject, Workspace, WorkspaceCache};
 
-use crate::commands::project::discovery::DiscoveredProject;
 use crate::commands::project::install_target::{InstallTarget, PackageSelection};
-use crate::commands::project::lock::{LockMode, LockOperation, LockResult};
-use crate::commands::project::lock_target::LockTarget;
-use crate::commands::project::lockfile::FrozenWorkspace;
 use crate::commands::project::{
-    EnvironmentUpdate, LinkErrorReporting, MalwareFindings, MissingLockfileSource, PlatformState,
-    ProjectEnvironment, ProjectEnvironmentTarget, ProjectError, ScriptEnvironment, UniversalState,
-    detect_conflicts, script_extra_build_requires, script_specification, update_environment,
+    EnvironmentUpdate, LinkErrorReporting, MalwareFindings, ProjectEnvironment,
+    ProjectEnvironmentTarget, ProjectError, ScriptEnvironment, detect_conflicts,
+    update_environment,
 };
 use uv_configuration::Modifications;
+use uv_dispatch::{PlatformState, UniversalState};
 use uv_install_operations::Changelog;
 use uv_install_operations::editable::apply_editable_mode;
 use uv_install_operations::loggers::{DefaultInstallLogger, InstallLogger};
 use uv_install_operations::report::{PackageChangesReport, SchemaReport};
+use uv_lock_operations::DiscoveredProject;
+use uv_lock_operations::FrozenWorkspace;
+use uv_lock_operations::LockError;
+use uv_lock_operations::LockTarget;
+use uv_lock_operations::MissingLockfileSource;
+use uv_lock_operations::{LockMode, LockOperation, LockResult};
+use uv_requirements::{script_extra_build_requires, script_specification};
 use uv_resolve_operations::loggers::DefaultResolveLogger;
 use uv_resolve_operations::resolution_markers;
 use uv_resolve_operations::resolution_tags;
@@ -174,7 +178,7 @@ pub(crate) async fn sync(
                 .read_frozen(MissingLockfileSource::from(source))
                 .await
                 .map_err(|err| match (err, *manifest) {
-                    (ProjectError::MissingLockfile(..), SyncManifest::Script(script)) => anyhow::anyhow!(
+                    (LockError::MissingLockfile(..), SyncManifest::Script(script)) => anyhow::anyhow!(
                         "`uv sync --frozen` requires a script lockfile; run `{}` to lock the script",
                         format!("uv lock --script {}", script.path.user_display()).green(),
                     ),
@@ -491,19 +495,16 @@ pub(crate) async fn sync(
             };
             let outcome = match result {
                 Ok(result) => Outcome::Success(result),
-                Err(ProjectError::Resolve(err)) => return Err(UvError::from(err).into()),
-                Err(err @ ProjectError::LockFormat(..)) => return Err(UvError::user(err).into()),
-                Err(ProjectError::LockMismatch(prev, cur, lock_source)) => {
+                Err(LockError::Resolve(err)) => return Err(UvError::from(*err).into()),
+                Err(err @ LockError::LockFormat(..)) => return Err(UvError::user(err).into()),
+                Err(LockError::LockMismatch(prev, cur, lock_source)) => {
                     if dry_run.enabled() {
                         // A dry run continues with the new resolution but exits unsuccessfully.
                         Outcome::LockMismatch(prev, cur, lock_source)
                     } else {
-                        return Err(UvError::user(ProjectError::LockMismatch(
-                            prev,
-                            cur,
-                            lock_source,
-                        ))
-                        .into());
+                        return Err(
+                            UvError::user(LockError::LockMismatch(prev, cur, lock_source)).into(),
+                        );
                     }
                 }
                 Err(err) => return Err(UvError::from(err).into()),
@@ -596,7 +597,7 @@ pub(crate) async fn sync(
     match outcome {
         Outcome::Success(..) | Outcome::Frozen(..) => Ok(ExitStatus::Success),
         Outcome::LockMismatch(prev, cur, lock_source) => {
-            Err(UvError::user(ProjectError::LockMismatch(prev, cur, lock_source)).into())
+            Err(UvError::user(LockError::LockMismatch(prev, cur, lock_source)).into())
         }
     }
 }
