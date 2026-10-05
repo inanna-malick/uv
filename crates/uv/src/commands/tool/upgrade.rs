@@ -30,7 +30,7 @@ use uv_workspace::WorkspaceCache;
 use crate::commands::pip::loggers::{
     DefaultInstallLogger, SummaryResolveLogger, UpgradeInstallLogger,
 };
-use crate::commands::pip::{operations::Modifications, resolution_tags};
+use crate::commands::pip::resolution_tags;
 use crate::commands::project::{
     EnvironmentResolution, EnvironmentUpdate, PlatformState, resolve_environment, sync_environment,
     update_environment,
@@ -39,7 +39,8 @@ use crate::commands::reporters::PythonDownloadReporter;
 use crate::commands::tool::common::{ToolLock, remove_entrypoints, tool_environment_spec};
 use crate::commands::{ExitStatus, conjunction, tool::common::finalize_tool_install};
 use crate::printer::Printer;
-use crate::settings::ResolverInstallerSettings;
+use uv_configuration::Modifications;
+use uv_settings::ResolverInstallerSettings;
 
 /// Upgrade a tool.
 pub(crate) async fn upgrade(
@@ -449,7 +450,7 @@ async fn upgrade_tool(
             // Otherwise, upgrade the existing environment.
             let ResolverInstallerSettings {
                 resolver:
-                    crate::settings::ResolverSettings {
+                    uv_settings::ResolverSettings {
                         config_setting,
                         config_settings_package,
                         extra_build_dependencies,

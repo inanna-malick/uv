@@ -39,7 +39,7 @@ use crate::commands::pip::latest::LatestClient;
 use crate::commands::pip::loggers::{
     DefaultInstallLogger, DefaultResolveLogger, SummaryResolveLogger,
 };
-use crate::commands::pip::operations::{self, Modifications};
+use crate::commands::pip::operations;
 use crate::commands::pip::{resolution_markers, resolution_tags};
 use crate::commands::project::{
     EnvironmentResolution, EnvironmentSpecification, PlatformState, ProjectError,
@@ -52,7 +52,8 @@ use crate::commands::tool::common::{
 use crate::commands::tool::{Target, ToolRequest};
 use crate::commands::{UvError, reporters::PythonDownloadReporter};
 use crate::printer::Printer;
-use crate::settings::{ResolverInstallerSettings, ResolverSettings};
+use uv_configuration::Modifications;
+use uv_settings::{ResolverInstallerSettings, ResolverSettings};
 
 /// Install a tool.
 pub(crate) async fn install(

@@ -62,7 +62,6 @@ struct GistFile {
 use crate::commands::pip::loggers::{
     DefaultInstallLogger, DefaultResolveLogger, SummaryInstallLogger, SummaryResolveLogger,
 };
-use crate::commands::pip::operations::Modifications;
 use crate::commands::project::environment::{CachedEnvironment, EphemeralEnvironment};
 use crate::commands::project::install_target::{InstallTarget, PackageSelection};
 use crate::commands::project::lock::LockMode;
@@ -77,7 +76,8 @@ use crate::commands::project::{
 use crate::commands::reporters::PythonDownloadReporter;
 use crate::commands::{ExitStatus, UvError, project, read_env_files};
 use crate::printer::Printer;
-use crate::settings::{
+use uv_configuration::Modifications;
+use uv_settings::{
     FrozenSource, LockCheck, LockedSource, ResolverInstallerSettings, ResolverSettings,
 };
 

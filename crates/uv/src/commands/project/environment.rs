@@ -3,13 +3,13 @@ use std::path::Path;
 use tracing::debug;
 
 use crate::commands::pip::loggers::{InstallLogger, ResolveLogger};
-use crate::commands::pip::operations::Modifications;
 use crate::commands::project::{
     EnvironmentResolution, EnvironmentSpecification, PlatformState, ProjectError,
     resolve_environment, sync_environment,
 };
 use crate::printer::Printer;
-use crate::settings::ResolverInstallerSettings;
+use uv_configuration::Modifications;
+use uv_settings::ResolverInstallerSettings;
 
 use uv_cache::{Cache, CacheBucket};
 use uv_cache_info::CacheInfo;

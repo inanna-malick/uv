@@ -56,7 +56,7 @@ use crate::commands::project::{
 use crate::commands::reporters::{PythonDownloadReporter, ResolverReporter};
 use crate::commands::{ExitStatus, ScriptPath, UvError, pip};
 use crate::printer::Printer;
-use crate::settings::{FrozenSource, LockCheck, LockedSource, ResolverSettings};
+use uv_settings::{FrozenSource, LockCheck, LockedSource, ResolverSettings};
 
 /// The result of running a lock operation.
 #[derive(Debug, Clone)]

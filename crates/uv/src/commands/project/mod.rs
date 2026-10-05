@@ -58,7 +58,7 @@ use uv_workspace::{ProjectEnvironmentSelection, RequiresPythonSources, Workspace
 
 use crate::commands::locked_requirements::{LockedRequirements, read_lock_requirements};
 use crate::commands::pip::loggers::{InstallLogger, ResolveLogger};
-use crate::commands::pip::operations::{Changelog, Modifications};
+use crate::commands::pip::operations::Changelog;
 use crate::commands::project::install_target::{InstallTarget, PackageSelection};
 use crate::commands::project::python::{
     CompatibleProjectPython, PythonRequirementSource, format_requires_python_sources,
@@ -70,7 +70,8 @@ pub(crate) use crate::commands::project::python::{
 use crate::commands::reporters::{PythonDownloadReporter, ResolverReporter};
 use crate::commands::{capitalize, conjunction, pip};
 use crate::printer::Printer;
-use crate::settings::{
+use uv_configuration::Modifications;
+use uv_settings::{
     FrozenSource, InstallerSettingsRef, LockedSource, ResolverInstallerSettings, ResolverSettings,
 };
 

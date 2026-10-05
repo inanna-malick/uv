@@ -49,7 +49,6 @@ use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache};
 use crate::commands::pip::loggers::{
     DefaultInstallLogger, DefaultResolveLogger, SummaryResolveLogger,
 };
-use crate::commands::pip::operations::Modifications;
 use crate::commands::project::edit::{EditTarget, ProjectEdit, PythonTarget};
 use crate::commands::project::install_target::{InstallTarget, PackageSelection};
 use crate::commands::project::lock::LockMode;
@@ -63,7 +62,8 @@ use crate::commands::project::{
 use crate::commands::reporters::{PythonDownloadReporter, ResolverReporter};
 use crate::commands::{ExitStatus, ScriptPath, UvError, project};
 use crate::printer::Printer;
-use crate::settings::{FrozenSource, LockCheck, ResolverInstallerSettings};
+use uv_configuration::Modifications;
+use uv_settings::{FrozenSource, LockCheck, ResolverInstallerSettings};
 
 /// A failed dependency addition, with `uv add`-specific recovery context.
 #[derive(Debug, thiserror::Error)]
