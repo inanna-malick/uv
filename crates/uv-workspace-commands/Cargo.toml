@@ -1,5 +1,5 @@
 [package]
-name = "uv-scripts"
+name = "uv-workspace-commands"
 version = "0.0.90"
 description = "This is an internal component crate of uv"
 edition = { workspace = true }
@@ -9,33 +9,38 @@ repository = { workspace = true }
 authors = { workspace = true }
 license = { workspace = true }
 
-
 [lib]
+test = false
 doctest = false
 
 [lints]
 workspace = true
 
 [dependencies]
+uv-cache = { workspace = true }
+uv-client = { workspace = true }
+uv-command-support = { workspace = true }
 uv-configuration = { workspace = true }
+uv-dispatch = { workspace = true }
 uv-distribution-types = { workspace = true }
+uv-environment-operations = { workspace = true }
 uv-fs = { workspace = true }
+uv-install-operations = { workspace = true }
+uv-installer = { workspace = true }
+uv-lock = { workspace = true }
+uv-lock-operations = { workspace = true }
 uv-normalize = { workspace = true }
-uv-pep440 = { workspace = true }
-uv-pep508 = { workspace = true }
+uv-preview = { workspace = true }
 uv-pypi-types = { workspace = true }
-uv-redacted = { workspace = true }
+uv-python = { workspace = true }
+uv-python-context = { workspace = true }
+uv-resolve-operations = { workspace = true }
+uv-scripts = { workspace = true }
 uv-settings = { workspace = true }
 uv-warnings = { workspace = true }
 uv-workspace = { workspace = true }
 
-fs-err = { workspace = true, features = ["tokio"] }
-ignore = { workspace = true }
-indoc = { workspace = true }
-memchr = { workspace = true }
-regex = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
-thiserror = { workspace = true }
-toml = { workspace = true }
+anstream = { workspace = true }
+anyhow = { workspace = true }
+owo-colors = { workspace = true }
 tracing = { workspace = true }
-url = { workspace = true }

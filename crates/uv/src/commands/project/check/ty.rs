@@ -18,7 +18,7 @@ use uv_shell::shlex_posix;
 use uv_static::EnvVars;
 
 use crate::commands::reporters::BinaryDownloadReporter;
-use crate::commands::workspace::list::{ScriptDiscoveryError, find_scripts};
+use uv_scripts::{ScriptDiscoveryError, find_scripts};
 use uv_settings::{FrozenSource, LockCheck};
 
 /// Run a type check powered by ty.

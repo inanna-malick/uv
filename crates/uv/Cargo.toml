@@ -75,6 +75,7 @@ uv-version = { workspace = true }
 uv-virtualenv = { workspace = true }
 uv-warnings = { workspace = true }
 uv-workspace = { workspace = true, features = ["clap"] }
+uv-workspace-commands = { workspace = true }
 
 anstream = { workspace = true }
 anyhow = { workspace = true }
@@ -91,7 +92,6 @@ etcetera = { workspace = true }
 fs-err = { workspace = true, features = ["tokio"] }
 futures = { workspace = true }
 http = { workspace = true }
-ignore = { workspace = true }
 jiff = { workspace = true }
 indicatif = { workspace = true }
 indoc = { workspace = true }

@@ -1,95 +1,17 @@
+//! Discovery of PEP 723 scripts in a workspace tree.
+
 use std::borrow::Cow;
-use std::fmt::Write;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
-
-use owo_colors::OwoColorize;
 use thiserror::Error;
-use uv_cache::Cache;
-use uv_command_support::{ExitStatus, Printer};
 use uv_fs::{CWD, Simplified, ValidatedReader, is_virtualenv_base, normalize_path};
-use uv_preview::{Preview, PreviewFeature};
-use uv_scripts::{Pep723Error, Pep723Metadata};
-use uv_warnings::warn_user;
-use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache};
 
-/// List workspace members or PEP 723 scripts.
-pub(crate) async fn list(
-    project_dir: &Path,
-    paths: bool,
-    scripts: bool,
-    cache: &Cache,
-    workspace_cache: &WorkspaceCache,
-    printer: Printer,
-    preview: Preview,
-) -> Result<ExitStatus> {
-    if scripts && !preview.is_enabled(PreviewFeature::WorkspaceListScripts) {
-        warn_user!(
-            "The `--scripts` option is experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
-            PreviewFeature::WorkspaceListScripts
-        );
-    }
-
-    let workspace = Workspace::discover(
-        project_dir,
-        &DiscoveryOptions::default(),
-        cache,
-        workspace_cache,
-    )
-    .await?;
-
-    if scripts {
-        let mut scripts = find_scripts(workspace.install_path(), cache.root())
-            .filter_map(|script| match script {
-                Ok(script) => Some(Ok(script)),
-                Err(ScriptDiscoveryError::Parse { path, source }) => {
-                    warn_user!(
-                        "Skipping invalid PEP 723 script `{}`: {source}",
-                        path.simplified_display()
-                    );
-                    None
-                }
-                Err(
-                    error @ (ScriptDiscoveryError::Walk(_) | ScriptDiscoveryError::Read { .. }),
-                ) => Some(Err(error)),
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .with_context(|| {
-                format!(
-                    "Failed to discover PEP 723 scripts under workspace root `{}`",
-                    workspace.install_path().simplified_display()
-                )
-            })?;
-        scripts.sort_unstable();
-        for script in scripts {
-            let script = script
-                .strip_prefix(workspace.install_path())
-                .context("PEP 723 script was discovered outside the workspace root")?;
-            writeln!(printer.stdout(), "{}", script.simplified_display().cyan())?;
-        }
-        return Ok(ExitStatus::Success);
-    }
-
-    for (name, member) in workspace.packages() {
-        if paths {
-            writeln!(
-                printer.stdout(),
-                "{}",
-                member.root().simplified_display().cyan()
-            )?;
-        } else {
-            writeln!(printer.stdout(), "{}", name.cyan())?;
-        }
-    }
-
-    Ok(ExitStatus::Success)
-}
+use crate::{Pep723Error, Pep723Metadata};
 
 /// A failure encountered while discovering PEP 723 scripts.
 #[derive(Debug, Error)]
-pub(crate) enum ScriptDiscoveryError {
+pub enum ScriptDiscoveryError {
     /// The workspace could not be traversed.
     #[error("Failed to walk workspace while discovering PEP 723 scripts")]
     Walk(#[source] ignore::Error),
@@ -114,7 +36,7 @@ pub(crate) enum ScriptDiscoveryError {
 /// Respects ignore files and excludes repository internals, virtual environments, and the uv cache
 /// from traversal. Script-specific errors are returned individually so callers can decide whether
 /// invalid candidates should fail discovery.
-pub(crate) fn find_scripts(
+pub fn find_scripts(
     workspace_root: &Path,
     cache_root: &Path,
 ) -> impl Iterator<Item = Result<PathBuf, ScriptDiscoveryError>> {
