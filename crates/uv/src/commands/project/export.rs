@@ -38,9 +38,10 @@ use crate::commands::project::lock::{LockMode, LockOperation};
 use crate::commands::project::lock_target::LockTarget;
 use crate::commands::project::lockfile::FrozenWorkspace;
 use crate::commands::project::{
-    ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter, ProjectPythonRequest,
-    ScriptInterpreter, UniversalState, detect_conflicts,
+    ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter, UniversalState,
+    detect_conflicts,
 };
+use uv_python_context::{ProjectPythonRequest, ScriptInterpreter};
 use uv_settings::{FrozenSource, LockCheck, ResolverSettings};
 
 #[derive(Debug, Clone)]

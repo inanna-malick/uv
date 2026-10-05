@@ -24,10 +24,10 @@ use crate::commands::project::lock_target::LockTarget;
 use crate::commands::project::lockfile::FrozenWorkspace;
 use crate::commands::project::{
     LinkErrorReporting, ProjectEnvironment, ProjectEnvironmentPolicy, ProjectEnvironmentTarget,
-    ProjectError, ProjectInterpreter, ProjectPythonRequest, ScriptEnvironment, ScriptInterpreter,
-    UniversalState,
+    ProjectError, ProjectInterpreter, ScriptEnvironment, UniversalState,
 };
 use uv_configuration::Modifications;
+use uv_python_context::{ProjectPythonRequest, ScriptInterpreter};
 use uv_settings::{FrozenSource, LockCheck, ResolverSettings};
 
 use super::module_owners::collect_module_owners;

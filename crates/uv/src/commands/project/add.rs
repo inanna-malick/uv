@@ -57,12 +57,13 @@ use crate::commands::project::lock_target::LockTarget;
 use crate::commands::project::sync::MalwareCheckContext;
 use crate::commands::project::{
     LinkErrorReporting, PlatformState, ProjectEnvironment, ProjectEnvironmentPolicy,
-    ProjectEnvironmentTarget, ProjectError, ProjectInterpreter, ProjectPythonRequest,
-    ScriptInterpreter, UniversalState, init_script_python_requirement,
+    ProjectEnvironmentTarget, ProjectError, ProjectInterpreter, UniversalState,
 };
-use crate::commands::reporters::{PythonDownloadReporter, ResolverReporter};
+use crate::commands::reporters::ResolverReporter;
 use crate::commands::{ScriptPath, project};
 use uv_configuration::Modifications;
+use uv_python_context::PythonDownloadReporter;
+use uv_python_context::{ProjectPythonRequest, ScriptInterpreter, init_script_python_requirement};
 use uv_settings::{FrozenSource, LockCheck, ResolverInstallerSettings};
 
 /// A failed dependency addition, with `uv add`-specific recovery context.

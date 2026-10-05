@@ -71,12 +71,12 @@ use crate::commands::project::lock_target::LockTarget;
 use crate::commands::project::sync::MalwareCheckContext;
 use crate::commands::project::{
     EnvironmentSpecification, LinkErrorReporting, PreferenceLocation, ProjectEnvironment,
-    ProjectEnvironmentTarget, ProjectError, ProjectPythonRequest, ScriptEnvironment,
-    ScriptInterpreter, UniversalState, script_extra_build_requires, script_specification,
-    update_environment,
+    ProjectEnvironmentTarget, ProjectError, ScriptEnvironment, UniversalState,
+    script_extra_build_requires, script_specification, update_environment,
 };
-use crate::commands::reporters::PythonDownloadReporter;
 use uv_configuration::Modifications;
+use uv_python_context::PythonDownloadReporter;
+use uv_python_context::{ProjectPythonRequest, ScriptInterpreter};
 use uv_settings::{
     FrozenSource, LockCheck, LockedSource, ResolverInstallerSettings, ResolverSettings,
 };

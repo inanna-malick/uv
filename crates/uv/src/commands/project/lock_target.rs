@@ -28,7 +28,8 @@ use uv_workspace::dependency_groups::{
 use uv_workspace::pyproject::{BuildConstraintDependency, OverrideDependency};
 use uv_workspace::{Editability, Workspace, WorkspaceCache, WorkspaceMember};
 
-use crate::commands::project::{MissingLockfileSource, ProjectError, find_requires_python};
+use crate::commands::project::{MissingLockfileSource, ProjectError};
+use uv_python_context::find_requires_python;
 
 /// A target that can be resolved into a lockfile.
 #[derive(Debug, Copy, Clone)]
@@ -310,7 +311,7 @@ impl<'lock> LockTarget<'lock> {
             Self::Workspace(workspace) => {
                 // When locking, don't try to enforce requires-python bounds that appear on groups
                 let groups = DependencyGroupsWithDefaults::none();
-                find_requires_python(workspace, &groups)
+                find_requires_python(workspace, &groups).map_err(ProjectError::from)
             }
             Self::Script(script) => Ok(script
                 .metadata

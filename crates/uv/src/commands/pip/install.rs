@@ -51,11 +51,12 @@ use crate::commands::editable::apply_editable_mode;
 use crate::commands::install_report::write_install_report;
 use crate::commands::pip::loggers::{DefaultInstallLogger, DefaultResolveLogger, InstallLogger};
 use crate::commands::pip::operations::Changelog;
-use crate::commands::pip::operations::{report_interpreter, report_target_environment};
+use crate::commands::pip::operations::report_target_environment;
 use crate::commands::pip::{operations, resolution_markers, resolution_tags};
 use crate::commands::pylock::{read_pylock_toml, resolve_pylock_toml};
-use crate::commands::reporters::PythonDownloadReporter;
 use uv_configuration::Modifications;
+use uv_python_context::PythonDownloadReporter;
+use uv_python_context::report_interpreter;
 
 /// The interpreter is externally managed and cannot be modified.
 #[derive(Debug, Error)]

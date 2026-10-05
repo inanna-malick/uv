@@ -8,11 +8,11 @@ use crate::commands::pip::resolution_markers;
 use crate::commands::project::lock::{LockMode, LockOperation};
 use crate::commands::project::lock_target::LockTarget;
 use crate::commands::project::{
-    ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter, ProjectPythonRequest,
-    ScriptInterpreter, UniversalState,
+    ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter, UniversalState,
 };
 use crate::commands::reporters::AuditReporter;
 use uv_command_support::{ExitStatus, Printer, UvError};
+use uv_python_context::{ProjectPythonRequest, ScriptInterpreter};
 use uv_settings::{FrozenSource, LockCheck, ResolverSettings};
 
 use anyhow::{Result, bail};
