@@ -32,7 +32,6 @@ use uv_workspace::{
     DiscoveryOptions, ProjectWorkspace, VirtualProject, WorkspaceCache, WorkspaceErrorKind,
 };
 
-use crate::commands::pip::loggers::DefaultResolveLogger;
 use crate::commands::project::edit::ProjectEdit;
 use crate::commands::project::lock::{LockEvent, LockMode, LockOperation, LockResult};
 use crate::commands::project::lock_target::LockTarget;
@@ -40,6 +39,7 @@ use crate::commands::project::{
     ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter, UniversalState,
 };
 use uv_python_context::ProjectPythonRequest;
+use uv_resolve_operations::loggers::DefaultResolveLogger;
 use uv_settings::ResolverSettings;
 
 /// A dependency requirement selected for upgrading.

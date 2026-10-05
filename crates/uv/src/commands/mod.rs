@@ -1,9 +1,4 @@
-use std::fmt::Write;
 use std::path::PathBuf;
-
-use anyhow::Context;
-use owo_colors::OwoColorize;
-use tracing::debug;
 
 pub(crate) use auth::dir::dir as auth_dir;
 pub(crate) use auth::helper::helper as auth_helper;
@@ -58,22 +53,14 @@ pub(crate) use tool::run::run as tool_run;
 pub(crate) use tool::uninstall::uninstall as tool_uninstall;
 pub(crate) use tool::update_shell::update_shell as tool_update_shell;
 pub(crate) use tool::upgrade::upgrade as tool_upgrade;
-use uv_cache::Cache;
 pub use uv_command_support::ExitStatus;
-use uv_command_support::{Printer, elapsed};
-use uv_configuration::Concurrency;
 pub(crate) use uv_console::human_readable_bytes;
-use uv_fs::{CWD, Simplified};
-use uv_installer::{compile_files, compile_tree};
-use uv_python::PythonEnvironment;
 use uv_scripts::Pep723Script;
 pub(crate) use venv::venv;
 pub(crate) use version::self_version;
 pub(crate) use workspace::dir::dir;
 pub(crate) use workspace::list::list;
 pub(crate) use workspace::metadata::metadata;
-
-use crate::commands::pip::operations::ChangedDist;
 
 mod auth;
 pub(crate) mod build_backend;
@@ -83,10 +70,8 @@ mod cache_dir;
 mod cache_prune;
 mod cache_size;
 pub(crate) mod diagnostics;
-mod editable;
 mod help;
 mod install_report;
-mod locked_requirements;
 pub(crate) mod pip;
 mod project;
 mod publish;
@@ -107,7 +92,7 @@ mod error_tests {
     use anyhow::bail;
     use insta::{allow_duplicates, assert_snapshot};
 
-    use super::{pip, project};
+    use super::project;
     use uv_command_support::UvError;
 
     #[test]
@@ -116,7 +101,7 @@ mod error_tests {
             (ErrorKind::NotFound, true),
             (ErrorKind::PermissionDenied, false),
         ] {
-            let error = pip::operations::Error::Requirements(uv_requirements::Error::Io(
+            let error = uv_resolve_operations::Error::Requirements(uv_requirements::Error::Io(
                 Error::new(kind, "requirements failure"),
             ));
             let error = UvError::from(
@@ -132,14 +117,18 @@ mod error_tests {
             allow_duplicates! {
                 assert_snapshot!(format!("{error:#}"), @"Failed to resolve tool requirement: requirements failure");
             }
-            assert!(error.downcast_ref::<pip::operations::Error>().is_some());
+            assert!(
+                error
+                    .downcast_ref::<uv_resolve_operations::Error>()
+                    .is_some()
+            );
         }
         Ok(())
     }
 
     #[test]
     fn resolution_context_leaves_other_errors_unchanged() -> anyhow::Result<()> {
-        let error = pip::operations::Error::Io(Error::new(
+        let error = uv_resolve_operations::Error::Io(Error::new(
             ErrorKind::PermissionDenied,
             "cache write failed",
         ));
@@ -148,7 +137,11 @@ mod error_tests {
             bail!("operation classification changed with context");
         };
         assert_snapshot!(format!("{error:#}"), @"cache write failed");
-        assert!(error.downcast_ref::<pip::operations::Error>().is_some());
+        assert!(
+            error
+                .downcast_ref::<uv_resolve_operations::Error>()
+                .is_some()
+        );
         Ok(())
     }
 
@@ -160,99 +153,6 @@ mod error_tests {
         )));
         assert!(matches!(UvError::from(error), UvError::User(_)));
     }
-}
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
-pub(super) enum ChangeEventKind {
-    /// The package was removed from the environment.
-    Removed,
-    /// The package was added to the environment.
-    Added,
-    /// The package was reinstalled without changing versions.
-    Reinstalled,
-}
-
-#[derive(Debug)]
-pub(super) struct ChangeEvent<'a> {
-    dist: &'a ChangedDist,
-    kind: ChangeEventKind,
-}
-
-/// Compile all Python source files in site-packages to bytecode, to speed up the
-/// initial run of any subsequent executions.
-///
-/// See the `--compile` option on `pip sync` and `pip install`.
-pub(super) async fn compile_bytecode(
-    venv: &PythonEnvironment,
-    concurrency: &Concurrency,
-    cache: &Cache,
-    printer: Printer,
-) -> anyhow::Result<()> {
-    let start = std::time::Instant::now();
-    let mut files = 0;
-    for site_packages in venv.site_packages() {
-        let site_packages = CWD.join(site_packages);
-        if !site_packages.exists() {
-            debug!(
-                "Skipping non-existent site-packages directory: {}",
-                site_packages.display()
-            );
-            continue;
-        }
-        files += compile_tree(
-            &site_packages,
-            venv.python_executable(),
-            concurrency,
-            cache.root(),
-        )
-        .await
-        .with_context(|| {
-            format!(
-                "Failed to bytecode-compile Python file in: {}",
-                site_packages.user_display()
-            )
-        })?;
-    }
-    write_bytecode_summary(files, start, printer)?;
-    Ok(())
-}
-
-/// Compile the given Python source files to bytecode.
-pub(super) async fn compile_bytecode_files(
-    files: impl IntoIterator<Item = anyhow::Result<PathBuf>>,
-    venv: &PythonEnvironment,
-    concurrency: &Concurrency,
-    cache: &Cache,
-    printer: Printer,
-) -> anyhow::Result<()> {
-    let start = std::time::Instant::now();
-    let files = compile_files(files, venv.python_executable(), concurrency, cache.root())
-        .await
-        .context("Failed to bytecode-compile installed packages")?;
-    if files == 0 {
-        return Ok(());
-    }
-
-    write_bytecode_summary(files, start, printer)?;
-    Ok(())
-}
-
-fn write_bytecode_summary(
-    files: usize,
-    start: std::time::Instant,
-    printer: Printer,
-) -> std::fmt::Result {
-    let s = if files == 1 { "" } else { "s" };
-    writeln!(
-        printer.stderr(),
-        "{}",
-        format!(
-            "Bytecode compiled {} {}",
-            format!("{files} file{s}").bold(),
-            format!("in {}", elapsed(start.elapsed())).dimmed()
-        )
-        .dimmed()
-    )
 }
 
 /// Capitalize the first letter of a string.

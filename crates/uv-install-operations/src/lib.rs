@@ -1,431 +1,70 @@
-//! Common operations shared across the `pip` API and subcommands.
+//! Installation workflows used by uv commands.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, anyhow};
-use itertools::Itertools;
 use owo_colors::OwoColorize;
 use tracing::debug;
-
 use uv_cache::Cache;
-use uv_client::{BaseClientBuilder, RegistryClient};
-use uv_command_support::{Printer, UvError};
-use uv_configuration::{
-    BuildOptions, Concurrency, Constraints, DependencyGroups, DependencyModifiers, DryRun,
-    ExcludeDependency, Excludes, ExtrasSpecification, Modifications, Override, Overrides,
-    Reinstall, Upgrade,
-};
+use uv_client::RegistryClient;
+use uv_command_support::Printer;
+use uv_configuration::{BuildOptions, Concurrency, DryRun, Modifications, Reinstall};
 use uv_dispatch::BuildDispatch;
-use uv_distribution::{DistributionDatabase, SourcedDependencyGroups, dist_hints};
+use uv_distribution::DistributionDatabase;
 use uv_distribution_types::{
-    CachedDist, ConfigSettings, DependencyMetadata, Diagnostic, Dist, ExtraBuildRequires,
-    ExtraBuildVariables, IndexLocations, InstalledDist, InstalledVersion, LocalDist,
-    NameRequirementSpecification, PackageConfigSettings, Requirement, RequirementScope,
-    RequirementSource, ResolutionDiagnostic, ResolutionRecorder, UnresolvedRequirement,
-    UnresolvedRequirementSpecification, VersionOrUrlRef,
-};
-use uv_distribution_types::{
-    DerivationChain, DistributionMetadata, InstalledMetadata, Name, Resolution,
+    CachedDist, ConfigSettings, DependencyMetadata, Diagnostic, Dist, DistributionMetadata,
+    ExtraBuildRequires, ExtraBuildVariables, IndexLocations, InstalledDist, InstalledMetadata,
+    InstalledVersion, LocalDist, Name, PackageConfigSettings, Resolution, VersionOrUrlRef,
 };
 use uv_fs::{CWD, Simplified, normalize_path_under};
 use uv_install_wheel::{LinkMode, installed_dist_info_path, read_record_into_iter};
 use uv_installer::{InstallationStrategy, Plan, Planner, Preparer, SitePackages};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
-use uv_pep508::{MarkerEnvironment, RequirementOrigin, VerbatimUrl};
+use uv_pep508::VerbatimUrl;
 use uv_platform_tags::Tags;
 use uv_preview::Preview;
-use uv_pypi_types::{Conflicts, ResolverMarkerEnvironment};
+use uv_pypi_types::ResolverMarkerEnvironment;
 use uv_python::PythonEnvironment;
-use uv_python::managed::{ManagedPythonInstallation, PythonMinorVersionLink};
-use uv_requirements::{
-    GroupsSpecification, LookaheadResolver, NamedRequirementsResolver, RequirementsSource,
-    RequirementsSpecification, SourceTree, SourceTreeResolution, SourceTreeResolver,
-};
-use uv_resolver::{
-    DependencyMode, Exclusions, FlatIndex, InMemoryIndex, Manifest, NoSolutionError,
-    NoSolutionHeader, Options, Preference, Preferences, PythonRequirement, ResolveError, Resolver,
-    ResolverEnvironment, ResolverOutput, UpgradePackages,
-};
-use uv_tool::InstalledTools;
 use uv_types::{BuildContext, HashStrategy, InFlight};
 use uv_warnings::warn_user;
 
-use crate::commands::pip::loggers::{InstallLogger, ResolveLogger};
-use crate::commands::reporters::{InstallReporter, PrepareReporter, ResolverReporter};
-use crate::commands::{compile_bytecode, compile_bytecode_files};
+use crate::bytecode::{compile_bytecode, compile_bytecode_files};
+use crate::loggers::InstallLogger;
+use crate::reporters::{InstallReporter, PrepareReporter};
 
-/// Consolidate the requirements for an installation.
-pub(crate) async fn read_requirements(
-    requirements: &[RequirementsSource],
-    constraints: &[RequirementsSource],
-    overrides: &[RequirementsSource],
-    excludes: &[RequirementsSource],
-    extras: &ExtrasSpecification,
-    groups: Option<&GroupsSpecification>,
-    client_builder: &BaseClientBuilder<'_>,
-) -> Result<RequirementsSpecification, Error> {
-    // If the user requests `extras` but does not provide a valid source (e.g., a `pyproject.toml`),
-    // return an error.
-    if !extras.is_empty() && !requirements.iter().any(RequirementsSource::allows_extras) {
-        let has_editable = requirements
-            .iter()
-            .any(|source| matches!(source, RequirementsSource::Editable(_)));
-        return Err(anyhow::Error::new(ExtrasWithoutSourceError { has_editable }).into());
-    }
+mod bytecode;
+pub mod editable;
+mod error;
+pub mod loggers;
+pub mod report;
+pub mod reporters;
 
-    // Read all requirements from the provided sources.
-    Ok(RequirementsSpecification::from_sources(
-        requirements,
-        constraints,
-        overrides,
-        excludes,
-        groups,
-        client_builder,
-    )
-    .await?)
+pub use error::Error;
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
+enum ChangeEventKind {
+    /// The package was removed from the environment.
+    Removed,
+    /// The package was added to the environment.
+    Added,
+    /// The package was reinstalled without changing versions.
+    Reinstalled,
 }
 
-/// Resolve a set of constraints.
-pub(crate) async fn read_constraints(
-    constraints: &[RequirementsSource],
-    client_builder: &BaseClientBuilder<'_>,
-) -> Result<Vec<NameRequirementSpecification>, Error> {
-    Ok(
-        RequirementsSpecification::from_sources(&[], constraints, &[], &[], None, client_builder)
-            .await?
-            .constraints,
-    )
-}
-
-/// Resolve a set of requirements, similar to running `pip compile`.
-pub(crate) async fn resolve(
-    requirements: Vec<UnresolvedRequirementSpecification>,
-    constraints: Vec<NameRequirementSpecification>,
-    overrides: Vec<UnresolvedRequirementSpecification>,
-    lowered_overrides: Vec<Override<Requirement>>,
-    excludes: Vec<ExcludeDependency>,
-    source_trees: Vec<SourceTree>,
-    mut project: Option<PackageName>,
-    workspace_members: BTreeMap<PackageName, RequirementSource>,
-    extras: &ExtrasSpecification,
-    groups: &BTreeMap<PathBuf, DependencyGroups>,
-    preferences: Vec<Preference>,
-    installed_packages: Option<SitePackages>,
-    hasher: &HashStrategy,
-    reinstall: &Reinstall,
-    upgrade: &Upgrade,
-    tags: Option<&Tags>,
-    resolver_env: ResolverEnvironment,
-    python_requirement: PythonRequirement,
-    current_environment: &MarkerEnvironment,
-    conflicts: Conflicts,
-    client: &RegistryClient,
-    flat_index: &FlatIndex,
-    index: &InMemoryIndex,
-    build_dispatch: &BuildDispatch<'_>,
-    concurrency: &Concurrency,
-    options: Options,
-    recorder: Option<ResolutionRecorder>,
-    logger: Box<dyn ResolveLogger>,
-    printer: Printer,
-) -> Result<(ResolverOutput, HashStrategy), Error> {
-    let start = std::time::Instant::now();
-
-    // Resolve the requirements from the provided sources.
-    let requirements = {
-        // Partition the requirements into named and unnamed requirements.
-        let (mut requirements, unnamed): (Vec<_>, Vec<_>) =
-            requirements
-                .into_iter()
-                .partition_map(|spec| match spec.requirement {
-                    UnresolvedRequirement::Named(requirement) => {
-                        itertools::Either::Left(requirement)
-                    }
-                    UnresolvedRequirement::Unnamed(requirement) => {
-                        itertools::Either::Right(requirement)
-                    }
-                });
-
-        // Resolve any unnamed requirements.
-        if !unnamed.is_empty() {
-            requirements.extend(
-                NamedRequirementsResolver::new(
-                    hasher,
-                    index,
-                    DistributionDatabase::new(
-                        client,
-                        build_dispatch,
-                        concurrency.downloads_semaphore.clone(),
-                    )
-                    .with_recorder(recorder.clone()),
-                )
-                .with_reporter(Arc::new(ResolverReporter::from(printer)))
-                .resolve(unnamed.into_iter())
-                .await?,
-            );
-        }
-
-        // Resolve any source trees into requirements.
-        if !source_trees.is_empty() {
-            let resolutions = SourceTreeResolver::new(
-                extras,
-                hasher,
-                index,
-                DistributionDatabase::new(
-                    client,
-                    build_dispatch,
-                    concurrency.downloads_semaphore.clone(),
-                )
-                .with_recorder(recorder.clone()),
-            )
-            .with_reporter(Arc::new(ResolverReporter::from(printer)))
-            .resolve(source_trees.iter())
-            .await?;
-
-            // If we resolved a single project, use it for the project name.
-            project = project.or_else(|| {
-                if let [resolution] = &resolutions[..] {
-                    Some(resolution.project().clone())
-                } else {
-                    None
-                }
-            });
-
-            // If any of the extras were unused, surface a warning.
-            let mut unused_extras = extras
-                .explicit_names()
-                .filter(|extra| {
-                    !resolutions
-                        .iter()
-                        .any(|resolution| resolution.extras().contains(extra))
-                })
-                .collect::<Vec<_>>();
-            if !unused_extras.is_empty() {
-                unused_extras.sort_unstable();
-                unused_extras.dedup();
-                let s = if unused_extras.len() == 1 { "" } else { "s" };
-                return Err(anyhow!(
-                    "Requested extra{s} not found: {}",
-                    unused_extras.iter().join(", ")
-                )
-                .into());
-            }
-
-            // Extend the requirements with the resolved source trees.
-            requirements.extend(
-                resolutions
-                    .into_iter()
-                    .flat_map(SourceTreeResolution::into_requirements),
-            );
-        }
-
-        for (pyproject_path, groups) in groups {
-            let metadata = SourcedDependencyGroups::from_virtual_project(
-                pyproject_path,
-                None,
-                build_dispatch.locations(),
-                build_dispatch.sources().clone(),
-                build_dispatch.cache(),
-                build_dispatch.workspace_cache(),
-                client.credentials_cache(),
-            )
-            .await
-            .with_context(|| {
-                format!(
-                    "Failed to read dependency groups from: {}",
-                    pyproject_path.display()
-                )
-            })?;
-
-            // Complain if dependency groups are named that don't appear.
-            for name in groups.explicit_names() {
-                if !metadata.dependency_groups.contains_key(name) {
-                    Err(anyhow!(
-                        "The dependency group '{name}' was not found in the project: {}",
-                        pyproject_path.user_display()
-                    ))?;
-                }
-            }
-            // Apply dependency-groups
-            for (group_name, group) in &metadata.dependency_groups {
-                if groups.contains(group_name) {
-                    let scope =
-                        metadata
-                            .name
-                            .as_ref()
-                            .map_or(RequirementScope::Global, |package| {
-                                RequirementScope::Group {
-                                    package: package.clone(),
-                                    group: group_name.clone(),
-                                }
-                            });
-                    requirements.extend(group.iter().cloned().map(|group| Requirement {
-                        scope: scope.clone(),
-                        origin: Some(RequirementOrigin::Group(
-                            pyproject_path.clone(),
-                            metadata.name.clone(),
-                            group_name.clone(),
-                        )),
-                        ..group
-                    }));
-                }
-            }
-        }
-
-        requirements
-    };
-
-    // Incorporate hashes from requirements discovered while resolving source trees and groups.
-    let mut hasher = hasher
-        .clone()
-        .augment_with_requirements(requirements.iter())?;
-
-    // Resolve the overrides from the provided sources.
-    let overrides = {
-        // Partition the overrides into named and unnamed requirements.
-        let (mut overrides, unnamed): (Vec<_>, Vec<_>) =
-            overrides
-                .into_iter()
-                .partition_map(|spec| match spec.requirement {
-                    UnresolvedRequirement::Named(requirement) => {
-                        itertools::Either::Left(requirement)
-                    }
-                    UnresolvedRequirement::Unnamed(requirement) => {
-                        itertools::Either::Right(requirement)
-                    }
-                });
-
-        // Resolve any unnamed overrides.
-        if !unnamed.is_empty() {
-            overrides.extend(
-                NamedRequirementsResolver::new(
-                    &hasher,
-                    index,
-                    DistributionDatabase::new(
-                        client,
-                        build_dispatch,
-                        concurrency.downloads_semaphore.clone(),
-                    )
-                    .with_recorder(recorder.clone()),
-                )
-                .with_reporter(Arc::new(ResolverReporter::from(printer)))
-                .resolve(unnamed.into_iter())
-                .await?,
-            );
-        }
-
-        overrides
-    };
-
-    // Collect constraints, overrides, and excludes.
-    let constraints = Constraints::from_requirements(
-        constraints
-            .into_iter()
-            .map(|constraint| constraint.requirement)
-            .chain(upgrade.constraints().cloned()),
-    );
-    let overrides = Overrides::from_entries(
-        lowered_overrides
-            .into_iter()
-            .chain(overrides.into_iter().map(Override::Requirement))
-            .collect(),
-    )
-    .map_err(anyhow::Error::from)?;
-    let excludes = Excludes::from_entries(excludes);
-    let modifiers = DependencyModifiers::new(overrides, excludes);
-    let preferences = Preferences::from_iter(preferences, &resolver_env);
-
-    // Determine any lookahead requirements.
-    let lookaheads = match options.dependency_mode {
-        DependencyMode::Transitive => {
-            let constraints = constraints.clone().with_recorder(recorder.clone());
-            let modifiers = modifiers.clone().with_recorder(recorder.clone());
-            let (lookaheads, updated_hasher) = LookaheadResolver::new(
-                &requirements,
-                &constraints,
-                &modifiers,
-                &hasher,
-                index,
-                DistributionDatabase::new(
-                    client,
-                    build_dispatch,
-                    concurrency.downloads_semaphore.clone(),
-                )
-                .with_recorder(recorder.clone()),
-            )
-            .with_reporter(Arc::new(ResolverReporter::from(printer)))
-            .resolve(&resolver_env)
-            .await?;
-            hasher = updated_hasher;
-            lookaheads
-        }
-        DependencyMode::Direct => Vec::new(),
-    };
-
-    // TODO(zanieb): Consider consuming these instead of cloning
-    let exclusions = Exclusions::new(reinstall.clone(), UpgradePackages::for_non_project(upgrade));
-
-    // Create a manifest of the requirements.
-    let manifest = Manifest::new(
-        requirements,
-        constraints,
-        modifiers,
-        preferences,
-        project,
-        workspace_members,
-        exclusions,
-        lookaheads,
-    )
-    .with_recorder(recorder.clone());
-
-    // Resolve the dependencies.
-    let resolution = {
-        // If possible, create a bound on the progress bar.
-        let reporter = match options.dependency_mode {
-            DependencyMode::Transitive => ResolverReporter::from(printer),
-            DependencyMode::Direct => {
-                ResolverReporter::from(printer).with_length(manifest.num_requirements() as u64)
-            }
-        };
-
-        let resolver = Resolver::new(
-            manifest,
-            options,
-            &python_requirement,
-            resolver_env,
-            current_environment,
-            conflicts,
-            tags,
-            flat_index,
-            index,
-            &hasher,
-            build_dispatch,
-            installed_packages,
-            DistributionDatabase::new(
-                client,
-                build_dispatch,
-                concurrency.downloads_semaphore.clone(),
-            )
-            .with_recorder(recorder.clone()),
-        )?
-        .with_reporter(Arc::new(reporter));
-
-        resolver.resolve().await?
-    };
-
-    logger.on_complete(resolution.len(), start, printer)?;
-
-    Ok((resolution, hasher))
+#[derive(Debug)]
+struct ChangeEvent<'a> {
+    dist: &'a ChangedDist,
+    kind: ChangeEventKind,
 }
 
 /// A distribution which was or would be modified
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) enum ChangedDist {
+enum ChangedDist {
     Local(LocalDist),
     Remote(Arc<Dist>),
 }
@@ -441,7 +80,7 @@ impl Name for ChangedDist {
 
 /// The [`Version`] or [`VerbatimUrl`] for a changed dist.
 #[derive(Debug, PartialOrd, Ord, PartialEq, Eq, Hash)]
-pub(crate) enum ShortSpecifier<'a> {
+enum ShortSpecifier<'a> {
     Version(&'a Version),
     Url(&'a VerbatimUrl),
 }
@@ -457,7 +96,7 @@ impl std::fmt::Display for ShortSpecifier<'_> {
 
 /// The [`InstalledVersion`] or [`VerbatimUrl`] for a changed dist.
 #[derive(Debug, PartialOrd, Ord, PartialEq, Eq, Hash)]
-pub(crate) enum LongSpecifier<'a> {
+enum LongSpecifier<'a> {
     InstalledVersion(InstalledVersion<'a>),
     Url(&'a VerbatimUrl),
 }
@@ -472,7 +111,7 @@ impl std::fmt::Display for LongSpecifier<'_> {
 }
 
 impl ChangedDist {
-    pub(crate) fn short_specifier(&self) -> ShortSpecifier<'_> {
+    fn short_specifier(&self) -> ShortSpecifier<'_> {
         match self {
             Self::Local(dist) => ShortSpecifier::Version(dist.installed_version().version()),
             Self::Remote(dist) => match dist.version_or_url() {
@@ -482,7 +121,7 @@ impl ChangedDist {
         }
     }
 
-    pub(crate) fn long_specifier(&self) -> LongSpecifier<'_> {
+    fn long_specifier(&self) -> LongSpecifier<'_> {
         match self {
             Self::Local(dist) => LongSpecifier::InstalledVersion(dist.installed_version()),
             Self::Remote(dist) => match dist.version_or_url() {
@@ -494,7 +133,7 @@ impl ChangedDist {
         }
     }
 
-    pub(crate) fn version(&self) -> Option<&Version> {
+    fn version(&self) -> Option<&Version> {
         match self {
             Self::Local(dist) => Some(dist.installed_version().version()),
             Self::Remote(dist) => dist.version(),
@@ -504,13 +143,13 @@ impl ChangedDist {
 
 /// A summary of the changes made to the environment during an installation.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct Changelog {
+pub struct Changelog {
     /// The distributions that were installed.
-    pub(crate) installed: HashSet<ChangedDist>,
+    installed: HashSet<ChangedDist>,
     /// The distributions that were uninstalled.
-    pub(crate) uninstalled: HashSet<ChangedDist>,
+    uninstalled: HashSet<ChangedDist>,
     /// The distributions that were reinstalled.
-    pub(crate) reinstalled: HashSet<ChangedDist>,
+    reinstalled: HashSet<ChangedDist>,
 }
 
 impl Changelog {
@@ -549,25 +188,25 @@ impl Changelog {
     }
 
     /// Create a [`Changelog`] from a list of installed distributions.
-    pub(crate) fn from_installed(installed: Vec<CachedDist>) -> Self {
+    pub fn from_installed(installed: Vec<CachedDist>) -> Self {
         Self::from_local(installed, Vec::new())
     }
 
     /// Returns `true` if the changelog includes a distribution with the given name, either via
     /// an installation or uninstallation.
-    pub(crate) fn includes(&self, name: &PackageName) -> bool {
+    pub fn includes(&self, name: &PackageName) -> bool {
         self.installed.iter().any(|dist| dist.name() == name)
             || self.uninstalled.iter().any(|dist| dist.name() == name)
     }
 
     /// Returns `true` if the changelog is empty.
-    pub(crate) fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.installed.is_empty() && self.uninstalled.is_empty()
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum BytecodeCompilation {
+pub enum BytecodeCompilation {
     /// Compile all Python source files in the environment.
     All,
     /// Compile Python source files installed by this operation.
@@ -575,14 +214,14 @@ pub(crate) enum BytecodeCompilation {
 }
 
 /// An installation plan and the time required to create it.
-pub(crate) struct InstallationPlan {
+pub struct InstallationPlan {
     plan: Plan,
     elapsed: Duration,
 }
 
 impl InstallationPlan {
     /// Determine the changes required to make an environment satisfy a resolution.
-    pub(crate) fn build(
+    pub fn build(
         resolution: &Resolution,
         site_packages: SitePackages,
         installation: InstallationStrategy,
@@ -624,7 +263,7 @@ impl InstallationPlan {
     }
 
     /// Returns `true` if executing the plan would not modify the environment.
-    pub(crate) fn is_noop(
+    pub fn is_noop(
         &self,
         modifications: Modifications,
         compile: Option<BytecodeCompilation>,
@@ -639,7 +278,7 @@ impl InstallationPlan {
     }
 
     /// Complete an installation that was determined to be a no-op.
-    pub(crate) fn finish_noop(
+    pub fn finish_noop(
         self,
         resolution: &Resolution,
         modifications: Modifications,
@@ -677,7 +316,7 @@ impl InstallationPlan {
 /// Install a set of requirements into the current environment.
 ///
 /// Returns a [`Changelog`] summarizing the changes made to the environment.
-pub(crate) async fn install(
+pub async fn install(
     resolution: &Resolution,
     site_packages: SitePackages,
     installation: InstallationStrategy,
@@ -742,7 +381,7 @@ pub(crate) async fn install(
 
 impl InstallationPlan {
     /// Execute a previously computed installation plan.
-    pub(crate) async fn execute(
+    pub async fn execute(
         self,
         resolution: &Resolution,
         modifications: Modifications,
@@ -1153,61 +792,6 @@ async fn execute_plan(
     Ok((installs, uninstalls))
 }
 
-/// Display a message about the target environment for the operation.
-pub(crate) fn report_target_environment(
-    env: &PythonEnvironment,
-    cache: &Cache,
-    printer: Printer,
-) -> std::fmt::Result {
-    // Resolve minor-version link directories (e.g., `cpython-3.12` → `cpython-3.12.12`).
-    // On Windows, junction points aren't resolved by the interpreter's `sys.prefix`, so we
-    // use the target directory from the minor-version link to display the actual installation.
-    // This only applies to managed installations, not virtual environments.
-    let root = if env.interpreter().is_virtualenv() {
-        env.root().to_path_buf()
-    } else {
-        ManagedPythonInstallation::try_from_interpreter(env.interpreter())
-            .and_then(|installation| PythonMinorVersionLink::from_installation(&installation))
-            .map(|link| link.target_directory)
-            .unwrap_or_else(|| env.root().to_path_buf())
-    };
-
-    let message = format!(
-        "Using Python {} environment at: {}",
-        env.interpreter().python_version(),
-        root.user_display()
-    );
-
-    let Ok(target) = std::path::absolute(&root) else {
-        debug!("{}", message);
-        return Ok(());
-    };
-
-    // Do not report environments in the cache
-    if target.starts_with(cache.root()) {
-        debug!("{}", message);
-        return Ok(());
-    }
-
-    // Do not report tool environments
-    if let Ok(tools) = InstalledTools::from_settings() {
-        if target.starts_with(tools.root()) {
-            debug!("{}", message);
-            return Ok(());
-        }
-    }
-
-    // Do not report a default environment path
-    if let Ok(default) = std::path::absolute(PathBuf::from(".venv")) {
-        if target == default {
-            debug!("{}", message);
-            return Ok(());
-        }
-    }
-
-    writeln!(printer.stderr(), "{}", message.dimmed())
-}
-
 /// Report on the results of a dry-run installation.
 fn report_dry_run(
     dry_run: DryRun,
@@ -1280,25 +864,8 @@ fn report_dry_run(
     Ok(changelog)
 }
 
-/// Report any diagnostics on resolved distributions.
-pub(crate) fn diagnose_resolution(
-    diagnostics: &[ResolutionDiagnostic],
-    printer: Printer,
-) -> Result<(), Error> {
-    for diagnostic in diagnostics {
-        writeln!(
-            printer.stderr(),
-            "{}{} {}",
-            "warning".yellow().bold(),
-            ":".bold(),
-            diagnostic.message().bold()
-        )?;
-    }
-    Ok(())
-}
-
 /// Report any diagnostics on installed distributions in the Python environment.
-pub(crate) fn diagnose_environment<'a>(
+pub fn diagnose_environment<'a>(
     relevant_packages: impl Iterator<Item = &'a PackageName>,
     venv: &PythonEnvironment,
     markers: &ResolverMarkerEnvironment,
@@ -1324,220 +891,4 @@ pub(crate) fn diagnose_environment<'a>(
         }
     }
     Ok(())
-}
-
-#[derive(thiserror::Error, Debug)]
-pub(crate) enum Error {
-    #[error(transparent)]
-    Prepare(#[from] uv_installer::PrepareError),
-
-    #[error("{header}")]
-    NoSolution {
-        header: NoSolutionHeader,
-        #[source]
-        source: Box<NoSolutionError>,
-    },
-
-    #[error(transparent)]
-    Resolve(#[from] ResolveError),
-
-    #[error(transparent)]
-    Uninstall(#[from] uv_installer::UninstallError),
-
-    #[error(transparent)]
-    Hash(#[from] uv_types::HashStrategyError),
-
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
-
-    #[error(transparent)]
-    Fmt(#[from] std::fmt::Error),
-
-    #[error(transparent)]
-    Requirements(#[from] uv_requirements::Error),
-
-    #[error("Failed to resolve {context} requirement")]
-    RequirementsWithContext {
-        context: &'static str,
-        #[source]
-        source: uv_requirements::Error,
-    },
-
-    #[error(transparent)]
-    Anyhow(#[from] anyhow::Error),
-
-    #[error("The environment is outdated; run `{}` to update the environment", "uv sync".cyan())]
-    OutdatedEnvironment(Box<Changelog>),
-}
-
-impl Error {
-    /// Return the solver failure for an unsatisfiable resolution.
-    pub(crate) fn as_no_solution(&self) -> Option<&NoSolutionError> {
-        match self {
-            Self::NoSolution { source, .. } | Self::Resolve(ResolveError::NoSolution(source)) => {
-                Some(source)
-            }
-            Self::Resolve(_)
-            | Self::Prepare(_)
-            | Self::Uninstall(_)
-            | Self::Hash(_)
-            | Self::Io(_)
-            | Self::Fmt(_)
-            | Self::Requirements(_)
-            | Self::RequirementsWithContext { .. }
-            | Self::Anyhow(_)
-            | Self::OutdatedEnvironment(_) => None,
-        }
-    }
-
-    /// Return the changes required by an environment that failed an up-to-date check.
-    pub(crate) fn outdated_environment(&self) -> Option<&Changelog> {
-        match self {
-            Self::OutdatedEnvironment(changelog) => Some(changelog),
-            Self::NoSolution { .. }
-            | Self::Resolve(_)
-            | Self::Prepare(_)
-            | Self::Uninstall(_)
-            | Self::Hash(_)
-            | Self::Io(_)
-            | Self::Fmt(_)
-            | Self::Requirements(_)
-            | Self::RequirementsWithContext { .. }
-            | Self::Anyhow(_) => None,
-        }
-    }
-
-    /// Add the default heading when this operation is the final command error.
-    ///
-    /// Nested operation errors may already have a more specific heading from their caller.
-    #[must_use]
-    fn with_default_resolution_context(self) -> Self {
-        match self {
-            Self::Resolve(ResolveError::NoSolution(source)) => Self::NoSolution {
-                header: NoSolutionHeader::new(source.environment().clone()),
-                source,
-            },
-            error @ (Self::Prepare(_)
-            | Self::NoSolution { .. }
-            | Self::Resolve(_)
-            | Self::Uninstall(_)
-            | Self::Hash(_)
-            | Self::Io(_)
-            | Self::Fmt(_)
-            | Self::Requirements(_)
-            | Self::RequirementsWithContext { .. }
-            | Self::Anyhow(_)
-            | Self::OutdatedEnvironment(_)) => error,
-        }
-    }
-
-    /// Set the command-specific context for a resolution failure.
-    #[must_use]
-    pub(crate) fn with_resolution_context(self, context: &'static str) -> Self {
-        match self.with_default_resolution_context() {
-            Self::NoSolution { header, source } => Self::NoSolution {
-                header: header.with_context(context),
-                source,
-            },
-            Self::Requirements(source) | Self::RequirementsWithContext { source, .. } => {
-                Self::RequirementsWithContext { context, source }
-            }
-            error @ (Self::Prepare(_)
-            | Self::Resolve(_)
-            | Self::Uninstall(_)
-            | Self::Hash(_)
-            | Self::Io(_)
-            | Self::Fmt(_)
-            | Self::Anyhow(_)
-            | Self::OutdatedEnvironment(_)) => error,
-        }
-    }
-
-    /// Return whether this operation failure is an expected user-facing failure.
-    fn is_user_failure(&self) -> bool {
-        match self {
-            Self::Prepare(error) => error.is_user_failure(),
-            Self::NoSolution { .. } => true,
-            Self::Resolve(error) => error.is_user_failure(),
-            Self::Hash(_) | Self::OutdatedEnvironment(_) => true,
-            Self::Requirements(error) | Self::RequirementsWithContext { source: error, .. } => {
-                error.is_user_failure()
-            }
-            Self::Uninstall(_) | Self::Io(_) | Self::Fmt(_) | Self::Anyhow(_) => false,
-        }
-    }
-}
-
-impl uv_errors::Hinted for Error {
-    fn hints(&self) -> uv_errors::Hints<'_> {
-        match self {
-            Self::NoSolution { source, .. } => source.hints(),
-            Self::Resolve(uv_resolver::ResolveError::Dist(_, dist, chain, error)) => {
-                dist_hints(dist.name(), dist.version(), chain, error.hints())
-            }
-            Self::Resolve(uv_resolver::ResolveError::Dependencies(error, name, version, chain)) => {
-                dist_hints(name, Some(version), chain, error.hints())
-            }
-            Self::Resolve(error) => error.hints(),
-            Self::Requirements(uv_requirements::Error::Dist(_, dist, error))
-            | Self::RequirementsWithContext {
-                source: uv_requirements::Error::Dist(_, dist, error),
-                ..
-            } => dist_hints(
-                dist.name(),
-                dist.version(),
-                &DerivationChain::default(),
-                error.hints(),
-            ),
-            Self::Prepare(uv_installer::PrepareError::Dist(_, dist, chain, error)) => {
-                dist_hints(dist.name(), dist.version(), chain, error.hints())
-            }
-            Self::Anyhow(err) => {
-                for cause in err.chain() {
-                    if let Some(extra_err) = cause.downcast_ref::<ExtrasWithoutSourceError>() {
-                        return uv_errors::Hinted::hints(extra_err);
-                    }
-                }
-                uv_errors::Hints::none()
-            }
-            Self::Prepare(_)
-            | Self::Uninstall(_)
-            | Self::Hash(_)
-            | Self::Io(_)
-            | Self::Fmt(_)
-            | Self::Requirements(_)
-            | Self::RequirementsWithContext { .. }
-            | Self::OutdatedEnvironment(_) => uv_errors::Hints::none(),
-        }
-    }
-}
-
-/// Extras were requested but no valid source was provided.
-#[derive(Debug, thiserror::Error)]
-#[error(
-    "Requesting extras requires a `pylock.toml`, `pyproject.toml`, `setup.cfg`, or `setup.py` file"
-)]
-pub(crate) struct ExtrasWithoutSourceError {
-    has_editable: bool,
-}
-
-impl uv_errors::Hinted for ExtrasWithoutSourceError {
-    fn hints(&self) -> uv_errors::Hints<'_> {
-        uv_errors::Hints::from(if self.has_editable {
-            "Use `<dir>[extra]` syntax or `-r <file>` instead"
-        } else {
-            "Use `package[extra]` syntax instead"
-        })
-    }
-}
-
-impl From<Error> for UvError {
-    fn from(error: Error) -> Self {
-        let error = error.with_default_resolution_context();
-        if error.is_user_failure() {
-            Self::user(error)
-        } else {
-            Self::unexpected(error.into())
-        }
-    }
 }

@@ -45,12 +45,6 @@ use uv_warnings::{warn_user, warn_user_once};
 use uv_workspace::pyproject::Source;
 use uv_workspace::{DiscoveryOptions, MemberDiscovery, VirtualProject, Workspace, WorkspaceCache};
 
-use crate::commands::editable::apply_editable_mode;
-use crate::commands::install_report::{PackageChangesReport, SchemaReport};
-use crate::commands::pip::loggers::{DefaultInstallLogger, DefaultResolveLogger, InstallLogger};
-use crate::commands::pip::operations::Changelog;
-use crate::commands::pip::resolution_markers;
-use crate::commands::pip::{operations, resolution_tags};
 use crate::commands::project::discovery::DiscoveredProject;
 use crate::commands::project::install_target::{InstallTarget, PackageSelection};
 use crate::commands::project::lock::{LockMode, LockOperation, LockResult};
@@ -62,6 +56,13 @@ use crate::commands::project::{
     detect_conflicts, script_extra_build_requires, script_specification, update_environment,
 };
 use uv_configuration::Modifications;
+use uv_install_operations::Changelog;
+use uv_install_operations::editable::apply_editable_mode;
+use uv_install_operations::loggers::{DefaultInstallLogger, InstallLogger};
+use uv_install_operations::report::{PackageChangesReport, SchemaReport};
+use uv_resolve_operations::loggers::DefaultResolveLogger;
+use uv_resolve_operations::resolution_markers;
+use uv_resolve_operations::resolution_tags;
 use uv_settings::{
     FrozenSource, InstallerSettingsRef, LockCheck, LockedSource, ResolverInstallerSettings,
 };
@@ -412,7 +413,7 @@ pub(crate) async fn sync(
                     )?;
                     return Ok(ExitStatus::Success);
                 }
-                Err(ProjectError::Operation(error)) => {
+                Err(ProjectError::Install(error)) => {
                     if let Some(changelog) = error.outdated_environment() {
                         write_sync_report(
                             &target,
@@ -490,7 +491,7 @@ pub(crate) async fn sync(
             };
             let outcome = match result {
                 Ok(result) => Outcome::Success(result),
-                Err(ProjectError::Operation(err)) => return Err(UvError::from(err).into()),
+                Err(ProjectError::Resolve(err)) => return Err(UvError::from(err).into()),
                 Err(err @ ProjectError::LockFormat(..)) => return Err(UvError::user(err).into()),
                 Err(ProjectError::LockMismatch(prev, cur, lock_source)) => {
                     if dry_run.enabled() {
@@ -565,7 +566,7 @@ pub(crate) async fn sync(
     .await
     {
         Ok(changelog) => changelog,
-        Err(ProjectError::Operation(error)) => {
+        Err(ProjectError::Install(error)) => {
             if let Some(changelog) = error.outdated_environment() {
                 write_sync_report(
                     &target,
@@ -941,9 +942,10 @@ pub(crate) async fn do_sync(
     // Populate credentials from the target.
     store_credentials_from_target(target, &client_builder)?;
 
-    let bytecode_compilation = compile_bytecode.then_some(operations::BytecodeCompilation::All);
+    let bytecode_compilation =
+        compile_bytecode.then_some(uv_install_operations::BytecodeCompilation::All);
     let site_packages = SitePackages::from_environment(venv)?;
-    let installation_plan = operations::InstallationPlan::build(
+    let installation_plan = uv_install_operations::InstallationPlan::build(
         &resolution,
         site_packages,
         InstallationStrategy::Strict,

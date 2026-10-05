@@ -19,7 +19,7 @@ use uv_python::{
     PythonRequest, Target,
 };
 
-use crate::commands::pip::operations::report_target_environment;
+use crate::commands::pip::reporters::report_target_environment;
 
 /// Show information about one or more installed packages.
 pub(crate) fn pip_show(

@@ -28,10 +28,6 @@ use uv_tool::{InstalledTools, Tool};
 use uv_types::{HashStrategy, SourceTreeEditablePolicy};
 use uv_workspace::WorkspaceCache;
 
-use crate::commands::pip::loggers::{
-    DefaultInstallLogger, SummaryResolveLogger, UpgradeInstallLogger,
-};
-use crate::commands::pip::resolution_tags;
 use crate::commands::project::{
     EnvironmentResolution, EnvironmentUpdate, PlatformState, resolve_environment, sync_environment,
     update_environment,
@@ -39,7 +35,10 @@ use crate::commands::project::{
 use crate::commands::tool::common::finalize_tool_install;
 use crate::commands::tool::common::{ToolLock, remove_entrypoints, tool_environment_spec};
 use uv_configuration::Modifications;
+use uv_install_operations::loggers::{DefaultInstallLogger, UpgradeInstallLogger};
 use uv_python_context::PythonDownloadReporter;
+use uv_resolve_operations::loggers::SummaryResolveLogger;
+use uv_resolve_operations::resolution_tags;
 use uv_settings::ResolverInstallerSettings;
 
 /// Upgrade a tool.

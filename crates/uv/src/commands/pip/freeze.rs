@@ -16,7 +16,7 @@ use uv_normalize::PackageName;
 use uv_python::{EnvironmentPreference, Prefix, PythonEnvironment, PythonRequest, Target};
 use uv_python::{PythonArchitecture, PythonPreference};
 
-use crate::commands::pip::operations::report_target_environment;
+use crate::commands::pip::reporters::report_target_environment;
 
 /// Enumerate the installed packages in the current environment.
 pub(crate) fn pip_freeze(

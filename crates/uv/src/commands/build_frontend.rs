@@ -43,6 +43,7 @@ use uv_python::{
     VersionFileDiscoveryOptions,
 };
 use uv_requirements::RequirementsSource;
+use uv_resolve_operations as operations;
 use uv_resolver::{ExcludeNewer, FlatIndex};
 use uv_settings::PythonInstallMirrors;
 use uv_types::{AnyErrorBuild, BuildContext, BuildStack, HashStrategy, SourceTreeEditablePolicy};
@@ -50,7 +51,6 @@ use uv_warnings::warn_user;
 use uv_workspace::pyproject::ExtraBuildDependencies;
 use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache, WorkspaceError};
 
-use crate::commands::pip::operations;
 use crate::commands::project::ProjectError;
 use uv_python_context::PythonDownloadReporter;
 use uv_python_context::find_requires_python;

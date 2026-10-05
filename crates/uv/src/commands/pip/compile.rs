@@ -55,12 +55,12 @@ use uv_warnings::{warn_user, warn_user_once};
 use uv_workspace::WorkspaceCache;
 use uv_workspace::pyproject::ExtraBuildDependencies;
 
-use crate::commands::locked_requirements::{
+use uv_python_context::PythonDownloadReporter;
+use uv_resolve_operations::locked_requirements::{
     LockedRequirements, read_pylock_toml_requirements, read_requirements_txt,
 };
-use crate::commands::pip::loggers::DefaultResolveLogger;
-use crate::commands::pip::{operations, resolution_markers, resolution_tags};
-use uv_python_context::PythonDownloadReporter;
+use uv_resolve_operations::loggers::DefaultResolveLogger;
+use uv_resolve_operations::{resolution_markers, resolution_tags};
 
 /// Resolve a set of requirements into a set of pinned versions.
 #[expect(clippy::fn_params_excessive_bools)]
@@ -259,7 +259,7 @@ pub(crate) async fn pip_compile(
 
     // Read build constraints.
     let build_constraints = Constraints::from_specifications(
-        operations::read_constraints(build_constraints, &client_builder)
+        uv_resolve_operations::read_constraints(build_constraints, &client_builder)
             .await?
             .into_iter()
             .chain(build_constraints_from_workspace),
@@ -570,7 +570,7 @@ pub(crate) async fn pip_compile(
         .build();
 
     // Resolve the requirements.
-    let mut resolution = match operations::resolve(
+    let mut resolution = match uv_resolve_operations::resolve(
         requirements,
         constraints,
         overrides,
@@ -805,7 +805,7 @@ pub(crate) async fn pip_compile(
     writer.commit().await?;
 
     // Notify the user of any resolution diagnostics.
-    operations::diagnose_resolution(resolution.diagnostics(), printer)?;
+    uv_resolve_operations::diagnose_resolution(resolution.diagnostics(), printer)?;
 
     Ok(ExitStatus::Success)
 }

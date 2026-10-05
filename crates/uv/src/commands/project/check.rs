@@ -24,7 +24,6 @@ use uv_settings::{MalwareCheckSettings, PythonInstallMirrors};
 use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache, WorkspaceErrorKind};
 
-use crate::commands::pip::loggers::{SummaryInstallLogger, SummaryResolveLogger};
 use crate::commands::project;
 use crate::commands::project::environment::CachedEnvironment;
 use crate::commands::project::install_target::{InstallTarget, PackageSelection};
@@ -36,8 +35,10 @@ use crate::commands::project::{
     ProjectInterpreter, ScriptEnvironment, UniversalState,
 };
 use uv_configuration::Modifications;
+use uv_install_operations::loggers::SummaryInstallLogger;
 use uv_python_context::PythonDownloadReporter;
 use uv_python_context::{ProjectPythonRequest, ScriptInterpreter};
+use uv_resolve_operations::loggers::SummaryResolveLogger;
 use uv_settings::{FrozenSource, LockCheck, ResolverInstallerSettings};
 
 mod ty;

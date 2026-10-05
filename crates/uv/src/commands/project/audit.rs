@@ -3,8 +3,6 @@ use owo_colors::OwoColorize;
 use std::fmt::Write as _;
 use std::path::Path;
 
-use crate::commands::pip::loggers::DefaultResolveLogger;
-use crate::commands::pip::resolution_markers;
 use crate::commands::project::lock::{LockMode, LockOperation};
 use crate::commands::project::lock_target::LockTarget;
 use crate::commands::project::{
@@ -13,6 +11,8 @@ use crate::commands::project::{
 use crate::commands::reporters::AuditReporter;
 use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_python_context::{ProjectPythonRequest, ScriptInterpreter};
+use uv_resolve_operations::loggers::DefaultResolveLogger;
+use uv_resolve_operations::resolution_markers;
 use uv_settings::{FrozenSource, LockCheck, ResolverSettings};
 
 use anyhow::{Result, bail};
