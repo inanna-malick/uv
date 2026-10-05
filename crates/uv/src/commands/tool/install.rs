@@ -1,5 +1,6 @@
 use std::fmt::Write;
 use std::str::FromStr;
+use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_distribution_types::RequirementScope;
 
 use anyhow::{Result, bail};
@@ -34,7 +35,6 @@ use uv_types::{HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::{warn_user, warn_user_once, warn_user_with_chain};
 use uv_workspace::WorkspaceCache;
 
-use crate::commands::ExitStatus;
 use crate::commands::pip::latest::LatestClient;
 use crate::commands::pip::loggers::{
     DefaultInstallLogger, DefaultResolveLogger, SummaryResolveLogger,
@@ -45,13 +45,12 @@ use crate::commands::project::{
     EnvironmentResolution, EnvironmentSpecification, PlatformState, ProjectError,
     resolve_environment, resolve_names, sync_environment, update_environment,
 };
+use crate::commands::reporters::PythonDownloadReporter;
 use crate::commands::tool::common::{
     ToolLock, ToolPython, finalize_tool_install, refine_interpreter, remove_entrypoints,
     tool_environment_spec,
 };
 use crate::commands::tool::{Target, ToolRequest};
-use crate::commands::{UvError, reporters::PythonDownloadReporter};
-use crate::printer::Printer;
 use uv_configuration::Modifications;
 use uv_settings::{ResolverInstallerSettings, ResolverSettings};
 

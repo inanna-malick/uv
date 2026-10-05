@@ -3,6 +3,9 @@ use std::fmt::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
+use uv_command_support::child::read_env_files;
+use uv_command_support::child::run_to_completion;
+use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_distribution_types::RequirementScope;
 
 use anyhow::{Context, bail};
@@ -43,23 +46,19 @@ use uv_tool::{InstalledTools, entrypoint_paths};
 use uv_warnings::warn_user_once;
 use uv_workspace::WorkspaceCache;
 
-use crate::child::run_to_completion;
-use crate::commands::ExitStatus;
-
 use crate::commands::pip;
 use crate::commands::pip::latest::LatestClient;
 use crate::commands::pip::loggers::{
     DefaultInstallLogger, DefaultResolveLogger, SummaryInstallLogger, SummaryResolveLogger,
 };
 use crate::commands::pip::operations;
+use crate::commands::project::environment::CachedEnvironment;
 use crate::commands::project::{
     EnvironmentSpecification, PlatformState, ProjectError, resolve_names,
 };
 use crate::commands::reporters::PythonDownloadReporter;
 use crate::commands::tool::common::{ToolPython, matching_packages, refine_interpreter};
 use crate::commands::tool::{Target, ToolRequest};
-use crate::commands::{UvError, project::environment::CachedEnvironment, read_env_files};
-use crate::printer::Printer;
 use uv_settings::ResolverInstallerSettings;
 use uv_settings::ResolverSettings;
 

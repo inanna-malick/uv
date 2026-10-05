@@ -13,13 +13,14 @@ use tracing::debug;
 
 use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, RegistryClient};
+use uv_command_support::{Printer, UvError};
 use uv_configuration::{
     BuildOptions, Concurrency, Constraints, DependencyGroups, DependencyModifiers, DryRun,
     ExcludeDependency, Excludes, ExtrasSpecification, Modifications, Override, Overrides,
     Reinstall, Upgrade,
 };
 use uv_dispatch::BuildDispatch;
-use uv_distribution::{DistributionDatabase, SourcedDependencyGroups};
+use uv_distribution::{DistributionDatabase, SourcedDependencyGroups, dist_hints};
 use uv_distribution_types::{
     CachedDist, ConfigSettings, DependencyMetadata, Diagnostic, Dist, ExtraBuildRequires,
     ExtraBuildVariables, IndexLocations, InstalledDist, InstalledVersion, LocalDist,
@@ -57,7 +58,6 @@ use uv_warnings::warn_user;
 use crate::commands::pip::loggers::{InstallLogger, ResolveLogger};
 use crate::commands::reporters::{InstallReporter, PrepareReporter, ResolverReporter};
 use crate::commands::{compile_bytecode, compile_bytecode_files};
-use crate::printer::Printer;
 
 /// Consolidate the requirements for an installation.
 pub(crate) async fn read_requirements(
@@ -1472,7 +1472,7 @@ impl Error {
     ///
     /// Nested operation errors may already have a more specific heading from their caller.
     #[must_use]
-    pub(crate) fn with_default_resolution_context(self) -> Self {
+    fn with_default_resolution_context(self) -> Self {
         match self {
             Self::Resolve(ResolveError::NoSolution(source)) => Self::NoSolution {
                 header: NoSolutionHeader::new(source.environment().clone()),
@@ -1515,7 +1515,7 @@ impl Error {
     }
 
     /// Return whether this operation failure is an expected user-facing failure.
-    pub(crate) fn is_user_failure(&self) -> bool {
+    fn is_user_failure(&self) -> bool {
         match self {
             Self::Prepare(error) => error.is_user_failure(),
             Self::NoSolution { .. } => true,
@@ -1534,34 +1534,24 @@ impl uv_errors::Hinted for Error {
         match self {
             Self::NoSolution { source, .. } => source.hints(),
             Self::Resolve(uv_resolver::ResolveError::Dist(_, dist, chain, error)) => {
-                crate::commands::diagnostics::dist_hints(
-                    dist.name(),
-                    dist.version(),
-                    chain,
-                    error.hints(),
-                )
+                dist_hints(dist.name(), dist.version(), chain, error.hints())
             }
             Self::Resolve(uv_resolver::ResolveError::Dependencies(error, name, version, chain)) => {
-                crate::commands::diagnostics::dist_hints(name, Some(version), chain, error.hints())
+                dist_hints(name, Some(version), chain, error.hints())
             }
             Self::Resolve(error) => error.hints(),
             Self::Requirements(uv_requirements::Error::Dist(_, dist, error))
             | Self::RequirementsWithContext {
                 source: uv_requirements::Error::Dist(_, dist, error),
                 ..
-            } => crate::commands::diagnostics::dist_hints(
+            } => dist_hints(
                 dist.name(),
                 dist.version(),
                 &DerivationChain::default(),
                 error.hints(),
             ),
             Self::Prepare(uv_installer::PrepareError::Dist(_, dist, chain, error)) => {
-                crate::commands::diagnostics::dist_hints(
-                    dist.name(),
-                    dist.version(),
-                    chain,
-                    error.hints(),
-                )
+                dist_hints(dist.name(), dist.version(), chain, error.hints())
             }
             Self::Anyhow(err) => {
                 for cause in err.chain() {
@@ -1599,5 +1589,16 @@ impl uv_errors::Hinted for ExtrasWithoutSourceError {
         } else {
             "Use `package[extra]` syntax instead"
         })
+    }
+}
+
+impl From<Error> for UvError {
+    fn from(error: Error) -> Self {
+        let error = error.with_default_resolution_context();
+        if error.is_user_failure() {
+            Self::user(error)
+        } else {
+            Self::unexpected(error.into())
+        }
     }
 }

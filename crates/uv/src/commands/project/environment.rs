@@ -7,7 +7,7 @@ use crate::commands::project::{
     EnvironmentResolution, EnvironmentSpecification, PlatformState, ProjectError,
     resolve_environment, sync_environment,
 };
-use crate::printer::Printer;
+use uv_command_support::Printer;
 use uv_configuration::Modifications;
 use uv_settings::ResolverInstallerSettings;
 

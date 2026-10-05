@@ -6,13 +6,13 @@ use itertools::Itertools;
 use owo_colors::OwoColorize;
 use rustc_hash::{FxBuildHasher, FxHashMap};
 
+use uv_command_support::{Printer, elapsed};
 use uv_configuration::DryRun;
 use uv_distribution_types::Name;
 use uv_normalize::PackageName;
 
 use crate::commands::pip::operations::{Changelog, ShortSpecifier};
-use crate::commands::{ChangeEvent, ChangeEventKind, elapsed};
-use crate::printer::Printer;
+use crate::commands::{ChangeEvent, ChangeEventKind};
 
 /// A trait to handle logging during install operations.
 pub(crate) trait InstallLogger {

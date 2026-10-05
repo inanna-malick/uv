@@ -13,6 +13,7 @@ use uv_auth::{CredentialsCache, CredentialsFromUrlError};
 use uv_cache::{Cache, CacheBucket};
 use uv_cache_key::{cache_digest, cache_name};
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
+use uv_command_support::{Printer, UvError, conjunction};
 use uv_configuration::{
     ActiveEnvironment, Concurrency, Constraints, DependencyGroupsWithDefaults, DryRun,
     ExtrasSpecification, GitLfsSetting, HashCheckingMode, NoSources, Override, PackageOverride,
@@ -68,8 +69,7 @@ pub(crate) use crate::commands::project::python::{
     ProjectPythonRequest, PythonRequestSource, PythonRequirementConflicts, find_requires_python,
 };
 use crate::commands::reporters::{PythonDownloadReporter, ResolverReporter};
-use crate::commands::{capitalize, conjunction, pip};
-use crate::printer::Printer;
+use crate::commands::{capitalize, pip};
 use uv_configuration::Modifications;
 use uv_settings::{
     FrozenSource, InstallerSettingsRef, LockedSource, ResolverInstallerSettings, ResolverSettings,
@@ -3414,5 +3414,21 @@ fn warn_on_requirements_txt_setting(spec: &RequirementsSpecification, settings: 
         warn_user_once!(
             "Ignoring `--no-binary` setting from requirements file. Instead, use the `--no-build` command-line argument, or set `no-build` in a `uv.toml` or `pyproject.toml` file."
         );
+    }
+}
+
+impl From<ProjectError> for UvError {
+    fn from(error: ProjectError) -> Self {
+        match error {
+            error @ (ProjectError::LockMismatch(..)
+            | ProjectError::LockFormat(..)
+            | ProjectError::MissingLockfile(..)
+            | ProjectError::LockWorkspaceMismatch(..)) => Self::user(error),
+            ProjectError::Operation(error) => Self::from(error),
+            ProjectError::Requirements(error) => {
+                Self::from(crate::commands::pip::operations::Error::Requirements(error))
+            }
+            error => Self::unexpected(error.into()),
+        }
     }
 }

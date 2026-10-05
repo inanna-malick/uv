@@ -6,6 +6,7 @@ use owo_colors::OwoColorize;
 use thiserror::Error;
 use tracing::{Level, debug, enabled, warn};
 
+use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_errors::{Hinted, Hints};
 
 use uv_cache::Cache;
@@ -54,8 +55,6 @@ use crate::commands::pip::operations::{report_interpreter, report_target_environ
 use crate::commands::pip::{operations, resolution_markers, resolution_tags};
 use crate::commands::pylock::{read_pylock_toml, resolve_pylock_toml};
 use crate::commands::reporters::PythonDownloadReporter;
-use crate::commands::{ExitStatus, UvError};
-use crate::printer::Printer;
 use uv_configuration::Modifications;
 
 /// The interpreter is externally managed and cannot be modified.

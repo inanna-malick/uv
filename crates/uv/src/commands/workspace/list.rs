@@ -8,14 +8,12 @@ use anyhow::{Context, Result};
 use owo_colors::OwoColorize;
 use thiserror::Error;
 use uv_cache::Cache;
+use uv_command_support::{ExitStatus, Printer};
 use uv_fs::{CWD, Simplified, ValidatedReader, is_virtualenv_base, normalize_path};
 use uv_preview::{Preview, PreviewFeature};
 use uv_scripts::{Pep723Error, Pep723Metadata};
 use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache};
-
-use crate::commands::ExitStatus;
-use crate::printer::Printer;
 
 /// List workspace members or PEP 723 scripts.
 pub(crate) async fn list(
